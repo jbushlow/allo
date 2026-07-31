@@ -137,6 +137,9 @@ def build_pre_hls_manifest(
                 "specialization_suffix"
             ),
             "predicate_tag": (identity or {}).get("predicate_tag"),
+            "selected_branch_trace": (identity or {}).get(
+                "selected_branch_trace", []
+            ),
             "pre_hls_equivalence_hash": _sha256(body),
             "interface_hash": _sha256(json.dumps(interface, sort_keys=True)),
             "ports": [],

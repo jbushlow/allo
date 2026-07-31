@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # pylint: disable=no-name-in-module, unexpected-keyword-arg, no-value-for-parameter, global-variable-not-assigned, global-statement, broad-exception-caught
 
+import ast
 import functools
 import itertools
 import os
@@ -274,6 +275,7 @@ def move_stream_to_interface(
                 "df.parent_region",
                 "df.specialization_suffix",
                 "df.predicate_tag",
+                "df.selected_branch_trace",
             ):
                 if attr_name in func.attributes:
                     new_func.attributes[attr_name] = func.attributes[attr_name]
@@ -384,6 +386,7 @@ def move_stream_to_interface(
                 "df.parent_region",
                 "df.specialization_suffix",
                 "df.predicate_tag",
+                "df.selected_branch_trace",
             ):
                 if attr_name in func.attributes:
                     new_func.attributes[attr_name] = func.attributes[attr_name]
@@ -780,6 +783,11 @@ def build(
                         "predicate_tag": op.attributes[
                             "df.predicate_tag"
                         ].value,
+                        "selected_branch_trace": ast.literal_eval(
+                            op.attributes["df.selected_branch_trace"].value
+                        )
+                        if "df.selected_branch_trace" in op.attributes
+                        else [],
                     }
         write_pre_hls_debug_artifacts(manifest_config, functions, identities)
         manifest = build_pre_hls_manifest(

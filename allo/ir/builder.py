@@ -2113,6 +2113,15 @@ class ASTTransformer(ASTBuilder):
                                         )
                                     )
                                 )
+                                func_op.attributes["df.selected_branch_trace"] = (
+                                    StringAttr.get(
+                                        str(
+                                            ctx.func_selected_branch_traces.get(
+                                                orig_name, {}
+                                            ).get(dim, [])
+                                        )
+                                    )
+                                )
                                 if old_ctx.top_func is not None:
                                     func_op.attributes["df.parent_region"] = (
                                         StringAttr.get(old_ctx.top_func.name.value)

@@ -53,6 +53,7 @@ class ASTContext:
         inst=None,
         func_args=None,
         func_predicate_tags=None,
+        func_selected_branch_traces=None,
         func_tag2instance=None,
         unroll=True,
         meta_fors_to_unroll=None,
@@ -103,6 +104,15 @@ class ASTContext:
         self.func_predicate_tags = (
             {} if func_predicate_tags is None else func_predicate_tags
         )
+        # df.kernel name -> {dim ids -> selected meta branch path}.  This is
+        # provenance only; unlike predicate tags, it must not affect function
+        # grouping or code generation.
+        self.func_selected_branch_traces = (
+            {}
+            if func_selected_branch_traces is None
+            else func_selected_branch_traces
+        )
+        self.selected_branch_trace = []
         # df.kernel name -> {predicate tag -> kernel instance},
         self.func_tag2instance = {} if func_tag2instance is None else func_tag2instance
         # a nested structure of (predicate, []),
@@ -131,6 +141,7 @@ class ASTContext:
             self.inst,
             self.func_args,
             self.func_predicate_tags,
+            self.func_selected_branch_traces,
             self.func_tag2instance,
             unroll=self.unroll,
             enable_tensor=self.enable_tensor,

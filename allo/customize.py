@@ -1387,6 +1387,7 @@ def customize(
         mlir_ctx=Context() if context is None else context,
         inst=instantiate,
         func_predicate_tags=ctx_type_inf.func_predicate_tags,
+        func_selected_branch_traces=ctx_type_inf.func_selected_branch_traces,
         unroll=unroll,
         meta_fors_to_unroll=ctx_type_inf.meta_fors_to_unroll,
         enable_tensor=enable_tensor,

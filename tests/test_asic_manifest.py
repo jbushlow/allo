@@ -155,6 +155,7 @@ def test_explicit_identity_overrides_specialized_function_suffix():
                 "pid": [0, 1],
                 "mapping": [6, 6],
                 "parent_region": "MXU_4_4_32_32_16_0",
+                "selected_branch_trace": ["meta_elif@42:8"],
             }
         },
     )
@@ -162,6 +163,7 @@ def test_explicit_identity_overrides_specialized_function_suffix():
     assert pe["semantic_id"] == "top/MXU_4_4_32_32_16_0/gemm/pid=0,1"
     assert pe["pid"] == [0, 1]
     assert pe["mapping"] == [6, 6]
+    assert pe["selected_branch_trace"] == ["meta_elif@42:8"]
 
 
 def test_repeated_stream_accesses_share_one_logical_endpoint():

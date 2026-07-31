@@ -774,6 +774,7 @@ class TypeInferer(ASTVisitor):
                                 arg.top_arg = top_arg_name.id
                             orig_name = node.name
                             old_ctx.func_predicate_tags[orig_name] = {}
+                            old_ctx.func_selected_branch_traces[orig_name] = {}
                             if ctx.unroll:
                                 for dim in np.ndindex(*mapping):
                                     new_ctx = old_ctx.copy()
@@ -790,6 +791,9 @@ class TypeInferer(ASTVisitor):
                                     old_ctx.func_predicate_tags[orig_name][dim] = (
                                         new_ctx.predicate_list
                                     )
+                                    old_ctx.func_selected_branch_traces[orig_name][
+                                        dim
+                                    ] = list(new_ctx.selected_branch_trace)
                                     node.name = orig_name
                             else:
                                 # If not unroll, only visit one 'sample' to get the execution predicates
@@ -1598,6 +1602,11 @@ class TypeInferer(ASTVisitor):
         else:
             raise RuntimeError("Unsupported meta function")
         if ctx.unroll and final_cond:
+            branch_kind = node.items[0].context_expr.func.attr
+            ctx.selected_branch_trace.append(
+                f"{branch_kind}@{getattr(node, 'lineno', 0)}:"
+                f"{getattr(node, 'col_offset', 0)}"
+            )
             ctx.with_scope_level += 1
             with ctx.block_scope_guard():
                 visit_stmts(ctx, node.body)
