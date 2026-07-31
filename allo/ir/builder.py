@@ -2090,6 +2090,27 @@ class ASTTransformer(ASTBuilder):
                                     new_ctx, new_node
                                 )
                                 func_op.attributes["df.kernel"] = UnitAttr.get()
+                                func_op.attributes["df.kernel_name"] = StringAttr.get(
+                                    orig_name
+                                )
+                                func_op.attributes["df.pid"] = StringAttr.get(
+                                    ",".join(map(str, dim))
+                                )
+                                func_op.attributes["df.mapping"] = StringAttr.get(
+                                    ",".join(map(str, mapping))
+                                )
+                                func_op.attributes["df.specialization_suffix"] = (
+                                    StringAttr.get(getattr(ctx, "func_suffix", ""))
+                                )
+                                func_op.attributes["df.predicate_tag"] = (
+                                    StringAttr.get(
+                                        str(freeze_list(new_ctx.predicate_list))
+                                    )
+                                )
+                                if old_ctx.top_func is not None:
+                                    func_op.attributes["df.parent_region"] = (
+                                        StringAttr.get(old_ctx.top_func.name.value)
+                                    )
                                 # Mark kernels inside sub-regions so they aren't called from top
                                 if hasattr(ctx, "func_suffix"):
                                     func_op.attributes["df.nested_kernel"] = (

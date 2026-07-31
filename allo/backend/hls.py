@@ -5,6 +5,7 @@
 import os
 import re
 import io
+import sys
 import subprocess
 import time
 import numpy as np
@@ -246,6 +247,7 @@ class HLSModule:
             base_configs = DEFAULT_CONFIG.copy()
         base_configs.update(user_configs)
         configs = base_configs
+        self.asic_manifest_config = configs.get("asic_manifest")
         self.num_output_args = configs.get("num_output_args", None)
         if self.mode is not None:
             configs["mode"] = self.mode
@@ -557,6 +559,41 @@ class HLSModule:
             return self.hls_code
         return f"HLSModule({self.top_func_name}, {self.mode}, {self.project})"
 
+    def _enrich_asic_manifest(self):
+        """Join compiler identities to Vitis and RTL artifacts after csynth."""
+        config = self.asic_manifest_config
+        if not config or not config.get("enabled", True):
+            return
+        pre_manifest = config["path"]
+        if not os.path.isfile(pre_manifest):
+            raise FileNotFoundError(f"ASIC manifest not found: {pre_manifest}")
+        extractor = os.path.abspath(
+            os.path.join(
+                os.path.dirname(__file__),
+                "../../scripts/extract_vitis_pe_manifest.py",
+            )
+        )
+        cmd = [
+            sys.executable,
+            extractor,
+            "--kernel-cpp",
+            os.path.join(self.project, "kernel.cpp"),
+            "--pre-manifest",
+            pre_manifest,
+            "--solution-dir",
+            os.path.join(self.project, "out.prj", "solution1"),
+            "--output",
+            config["final_path"],
+        ]
+        if config.get("debug_artifacts"):
+            cmd.extend(["--debug-dir", config["debug_dir"]])
+        result = subprocess.run(cmd, check=False)
+        if result.returncode != 0:
+            print(
+                "Warning: ASIC manifest contains unmatched or ambiguous "
+                f"post-HLS records; inspect {config['final_path']}"
+            )
+
     def __call__(self, *args, shell=True):
         if self.platform == "vivado_hls":
             assert is_available("vivado_hls"), "vivado_hls is not available"
@@ -620,6 +657,7 @@ class HLSModule:
                 process.wait()
                 if process.returncode != 0:
                     raise RuntimeError("Failed to synthesize the design")
+                self._enrich_asic_manifest()
                 return
             # Use Makefile (sw_emu, hw_emu, hw)
             assert "XDEVICE" in os.environ, "Please set XDEVICE in your environment"

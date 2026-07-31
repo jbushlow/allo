@@ -3,8 +3,6 @@
 
 import json
 import os
-import subprocess
-import sys
 from pathlib import Path
 
 import allo
@@ -212,6 +210,8 @@ def test_large_scale_gemm():
             "asic_manifest": {
                 "enabled": True,
                 "path": "asic-manifest.json",
+                "debug_artifacts": True,
+                "debug_dir": "asic-debug",
             },
         },
     )
@@ -233,27 +233,7 @@ def test_large_scale_gemm():
     if os.environ.get("RUN_VITIS") == "1":
         modc()
         print("Vitis HLS synthesis completed.")
-        rtl_manifest = project / "asic-rtl-manifest.json"
-        extractor = (
-            Path(__file__).parents[2]
-            / "scripts"
-            / "extract_vitis_pe_manifest.py"
-        )
-        subprocess.run(
-            [
-                sys.executable,
-                str(extractor),
-                "--kernel-cpp",
-                str(project / "kernel.cpp"),
-                "--solution-dir",
-                str(project / "out.prj" / "solution1"),
-                "--kernel",
-                "gemm",
-                "--output",
-                str(rtl_manifest),
-            ],
-            check=True,
-        )
+        rtl_manifest = project / "asic-manifest-final.json"
         assert rtl_manifest.is_file()
         assert rtl_manifest.with_suffix(".tcl").is_file()
         print(f"Generated post-HLS ASIC manifest: {rtl_manifest}")

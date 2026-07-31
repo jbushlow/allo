@@ -16,6 +16,7 @@ packages and can run after synthesis on a different machine.
 from __future__ import annotations
 
 import argparse
+import copy
 import hashlib
 import json
 import re
@@ -181,7 +182,8 @@ def _alpha_tokens(text: str, fixed: set[str]) -> tuple[list[str], dict[str, str]
     return tokens, identifiers
 
 
-def canonical_hls_fingerprint(function: CFunction) -> tuple[str, dict]:
+def canonical_hls_serialization(function: CFunction) -> tuple[str, dict]:
+    """Return the exact stable HLS serialization consumed by SHA-256."""
     body = re.sub(r"//[^\n]*|/\*.*?\*/", " ", function.body, flags=re.DOTALL)
     body = re.sub(r"(?m)^\s*[A-Za-z_]\w*\s*:\s*(?=for\s*\()", "", body)
     tokens, _ = _alpha_tokens(body, CPP_FIXED_IDENTIFIERS)
@@ -198,7 +200,12 @@ def canonical_hls_fingerprint(function: CFunction) -> tuple[str, dict]:
     # Sorting makes the signature independent of absolute N/S/E/W port order.
     ports.sort(key=lambda item: (item["direction"], item["type"]))
     serialized = json.dumps({"ports": ports, "tokens": tokens}, sort_keys=True)
-    return hashlib.sha256(serialized.encode()).hexdigest(), {"ports": ports}
+    return serialized, {"ports": ports}
+
+
+def canonical_hls_fingerprint(function: CFunction) -> tuple[str, dict]:
+    serialized, interface = canonical_hls_serialization(function)
+    return hashlib.sha256(serialized.encode()).hexdigest(), interface
 
 
 VERILOG_KEYWORDS = {
@@ -211,8 +218,8 @@ VERILOG_KEYWORDS = {
 }
 
 
-def canonical_verilog_fingerprint(text: str) -> str:
-    """Hash RTL modulo comments, generated identifiers, and port permutations."""
+def canonical_verilog_serialization(text: str) -> str:
+    """Return RTL tokens modulo comments and generated identifiers."""
     text = re.sub(r"//[^\n]*|/\*.*?\*/", " ", text, flags=re.DOTALL)
     own_modules = set(re.findall(r"(?m)^\s*module\s+([A-Za-z_][\w$]*)", text))
     instantiated_types = set(
@@ -228,7 +235,13 @@ def canonical_verilog_fingerprint(text: str) -> str:
     # modules merely because two different child types occur in the same place.
     fixed = VERILOG_KEYWORDS | (instantiated_types - own_modules)
     tokens, _ = _alpha_tokens(text, fixed)
-    return hashlib.sha256(" ".join(tokens).encode()).hexdigest()
+    return " ".join(tokens)
+
+
+def canonical_verilog_fingerprint(text: str) -> str:
+    """Hash RTL modulo comments and generated identifiers."""
+    serialized = canonical_verilog_serialization(text)
+    return hashlib.sha256(serialized.encode()).hexdigest()
 
 
 def parse_vitis_log(text: str) -> dict:
@@ -331,14 +344,22 @@ def build_manifest(
     function_pattern: str,
     function_name: str | None = None,
     kernel_filter: str | None = None,
+    function_names: set[str] | None = None,
 ) -> dict:
     functions = parse_cpp_functions(kernel_cpp.read_text(encoding="utf-8"))
     log_info = parse_vitis_log(log_path.read_text(encoding="utf-8", errors="replace"))
     definitions, instances = parse_verilog_modules(rtl_dir)
     selector = re.compile(function_pattern)
     selected = []
+    normalized_names = (
+        {_normalized_hls_function(name) for name in function_names}
+        if function_names is not None
+        else None
+    )
     for function in functions:
-        if function_name:
+        if normalized_names is not None:
+            keep = _normalized_hls_function(function.name) in normalized_names
+        elif function_name:
             keep = function.name == function_name
         else:
             match = selector.match(function.name)
@@ -555,6 +576,102 @@ def build_equivalence_groups(records: list[dict]) -> tuple[list[dict], list[dict
     return macro_groups, candidate_groups
 
 
+def _normalized_hls_function(name: str) -> str:
+    return name[: -len("_fixed")] if name.endswith("_fixed") else name
+
+
+def merge_pre_hls_manifest(pre_manifest: dict, post_manifest: dict) -> dict:
+    """Join compiler identities/connectivity to HLS/Vitis/RTL evidence."""
+    merged = copy.deepcopy(pre_manifest)
+    pe_by_function = {
+        _normalized_hls_function(pe["specialized_function"]): pe
+        for pe in merged.get("pe_instances", [])
+    }
+    joined_records = []
+    unmatched_records = []
+    for original in post_manifest["records"]:
+        record = copy.deepcopy(original)
+        pe = pe_by_function.get(_normalized_hls_function(record["hls_function"]))
+        if pe is None:
+            unmatched_records.append(record)
+            joined_records.append(record)
+            continue
+        record["semantic_id"] = pe["semantic_id"]
+        record["kernel"] = pe["kernel"]
+        record["pid"] = pe["pid"]
+        pe.setdefault("post_hls_records", []).append(record)
+        joined_records.append(record)
+
+    macro_groups, candidate_groups = build_equivalence_groups(joined_records)
+    merged.update(
+        {
+            "schema_version": max(2, merged.get("schema_version", 1)),
+            "stage": "post_hls_enriched",
+            "post_hls_inputs": post_manifest["inputs"],
+            "post_hls_records": joined_records,
+            "macro_groups": macro_groups,
+            "post_hls_candidate_groups": candidate_groups,
+            "summary": {
+                **post_manifest["summary"],
+                "pre_hls_pe_instances": len(merged.get("pe_instances", [])),
+                "joined_post_hls_records": len(joined_records)
+                - len(unmatched_records),
+                "unjoined_post_hls_records": len(unmatched_records),
+            },
+        }
+    )
+    return merged
+
+
+def write_debug_artifacts(
+    debug_dir: Path,
+    kernel_cpp: Path,
+    log_path: Path,
+    rtl_dir: Path,
+    manifest: dict,
+) -> None:
+    """Write exact post-HLS canonical inputs and parsed naming evidence."""
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    functions = {
+        function.name: function
+        for function in parse_cpp_functions(kernel_cpp.read_text(encoding="utf-8"))
+    }
+    log_info = parse_vitis_log(
+        log_path.read_text(encoding="utf-8", errors="replace")
+    )
+    (debug_dir / "parsed-vitis-log.json").write_text(
+        json.dumps(log_info, indent=2) + "\n", encoding="utf-8"
+    )
+    hls_dir = debug_dir / "canonical" / "hls"
+    rtl_debug_dir = debug_dir / "canonical" / "rtl"
+    hls_dir.mkdir(parents=True, exist_ok=True)
+    rtl_debug_dir.mkdir(parents=True, exist_ok=True)
+    written_hls = set()
+    written_rtl = set()
+    records = manifest.get("post_hls_records", manifest.get("records", []))
+    for record in records:
+        function_name = record["hls_function"]
+        if function_name not in written_hls and function_name in functions:
+            serialized, _ = canonical_hls_serialization(functions[function_name])
+            (hls_dir / f"{function_name}.txt").write_text(
+                serialized + "\n", encoding="utf-8"
+            )
+            written_hls.add(function_name)
+        for module in record.get("rtl_modules", []):
+            module_name = module["name"]
+            if module_name in written_rtl:
+                continue
+            rtl_path = Path(module["file"])
+            if not rtl_path.is_absolute():
+                rtl_path = rtl_dir / rtl_path.name
+            text = rtl_path.read_text(encoding="utf-8", errors="replace")
+            (rtl_debug_dir / f"{module_name}.txt").write_text(
+                canonical_verilog_serialization(text) + "\n",
+                encoding="utf-8",
+            )
+            written_rtl.add(module_name)
+
+
 def _find_log(solution: Path) -> Path:
     candidates = [solution / "solution1.log", solution.parent / "vitis_hls.log"]
     for path in candidates:
@@ -624,6 +741,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--vitis-log", type=Path)
     parser.add_argument(
+        "--pre-manifest",
+        type=Path,
+        help="pre-HLS ASIC manifest to enrich with HLS/Vitis/RTL evidence",
+    )
+    parser.add_argument(
+        "--debug-dir",
+        type=Path,
+        help="write parsed log and exact canonical HLS/RTL hash inputs here",
+    )
+    parser.add_argument(
         "--function",
         help="select one exact HLS function (useful for Vitis clone analysis)",
     )
@@ -650,14 +777,35 @@ def main(argv: list[str] | None = None) -> int:
     if not rtl_dir.is_dir():
         parser.error(f"RTL directory does not exist: {rtl_dir}")
 
-    manifest = build_manifest(
+    pre_manifest = None
+    function_names = None
+    if args.pre_manifest:
+        pre_manifest = json.loads(args.pre_manifest.read_text(encoding="utf-8"))
+        function_names = {
+            pe["specialized_function"]
+            for pe in pre_manifest.get("pe_instances", [])
+        }
+    post_manifest = build_manifest(
         args.kernel_cpp.resolve(),
         log_path,
         rtl_dir,
         args.function_regex,
         args.function,
         args.kernel,
+        function_names,
     )
+    if pre_manifest is not None:
+        manifest = merge_pre_hls_manifest(pre_manifest, post_manifest)
+    else:
+        manifest = post_manifest
+    if args.debug_dir:
+        write_debug_artifacts(
+            args.debug_dir.resolve(),
+            args.kernel_cpp.resolve(),
+            log_path,
+            rtl_dir,
+            manifest,
+        )
     rendered = json.dumps(manifest, indent=2) + "\n"
     if args.output:
         args.output.write_text(rendered, encoding="utf-8")

@@ -30,7 +30,9 @@ from .backend import AIE_MLIRModule
 from .backend.asic import (
     build_pre_hls_manifest,
     normalize_manifest_config,
+    write_debug_artifact,
     write_manifest,
+    write_pre_hls_debug_artifacts,
 )
 
 
@@ -265,6 +267,16 @@ def move_stream_to_interface(
                 new_func.attributes["tag"] = StringAttr.get(
                     func.attributes["tag"].value
                 )
+            for attr_name in (
+                "df.kernel_name",
+                "df.pid",
+                "df.mapping",
+                "df.parent_region",
+                "df.specialization_suffix",
+                "df.predicate_tag",
+            ):
+                if attr_name in func.attributes:
+                    new_func.attributes[attr_name] = func.attributes[attr_name]
             # move operations from old func to new func
             cnt_stream = 0
             for op in func.entry_block.operations:
@@ -365,6 +377,16 @@ def move_stream_to_interface(
                 new_func.attributes["tag"] = StringAttr.get(
                     func.attributes["tag"].value
                 )
+            for attr_name in (
+                "df.kernel_name",
+                "df.pid",
+                "df.mapping",
+                "df.parent_region",
+                "df.specialization_suffix",
+                "df.predicate_tag",
+            ):
+                if attr_name in func.attributes:
+                    new_func.attributes[attr_name] = func.attributes[attr_name]
             # move operations from old func to new func
             cnt_stream = 0
             for op in func.entry_block.operations:
@@ -710,13 +732,22 @@ def build(
         return LLVMOMPModule(s.module, s.top_func_name)
     # FPGA backend (vitis_hls, vivado_hls, tapa, ihls)
     manifest_config = normalize_manifest_config(configs, project)
+    build_configs = dict(configs or {})
     if manifest_config:
+        build_configs["asic_manifest"] = manifest_config
         global_vars = get_global_vars(func)
         s = _customize(func, global_vars=global_vars, enable_tensor=enable_tensor)
+        write_debug_artifact(
+            manifest_config, "01-specialized.mlir", str(s.module)
+        )
         stream_info, stream_types_dict, extra_stream_info = move_stream_to_interface(
             s, with_stream_type=True, with_extra_info=True
         )
+        write_debug_artifact(
+            manifest_config, "02-stream-interfaces.mlir", str(s.module)
+        )
         functions = {}
+        identities = {}
         for op in s.module.body.operations:
             if isinstance(op, func_d.FuncOp) and "df.kernel" in op.attributes:
                 function_name = op.attributes["sym_name"].value
@@ -729,6 +760,28 @@ def build(
                     else function_name
                 )
                 functions[manifest_name] = str(op)
+                if "df.kernel_name" in op.attributes:
+                    pid_text = op.attributes["df.pid"].value
+                    mapping_text = op.attributes["df.mapping"].value
+                    identities[manifest_name] = {
+                        "kernel": op.attributes["df.kernel_name"].value,
+                        "pid": [int(value) for value in pid_text.split(",")],
+                        "mapping": [
+                            int(value) for value in mapping_text.split(",")
+                        ],
+                        "parent_region": (
+                            op.attributes["df.parent_region"].value
+                            if "df.parent_region" in op.attributes
+                            else s.top_func_name
+                        ),
+                        "specialization_suffix": op.attributes[
+                            "df.specialization_suffix"
+                        ].value,
+                        "predicate_tag": op.attributes[
+                            "df.predicate_tag"
+                        ].value,
+                    }
+        write_pre_hls_debug_artifacts(manifest_config, functions, identities)
         manifest = build_pre_hls_manifest(
             top=s.top_func_name,
             functions=functions,
@@ -737,17 +790,21 @@ def build(
             extra_stream_info=extra_stream_info,
             func_instances=s.func_instances,
             mappings=getattr(func, "mappings", {}),
+            identities=identities,
             project=project,
         )
         write_manifest(manifest, manifest_config["path"])
         s = _build_top(s, stream_info)
+        write_debug_artifact(
+            manifest_config, "03-dataflow-top.mlir", str(s.module)
+        )
     else:
         s = customize(func, enable_tensor=enable_tensor)
     hls_mod = s.build(
         target=target,
         mode=mode,
         project=project,
-        configs=configs,
+        configs=build_configs,
         wrap_io=wrap_io,
     )
     return hls_mod

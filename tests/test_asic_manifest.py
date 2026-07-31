@@ -81,6 +81,14 @@ func.func @top(%south: !allo.stream<i32>, %north: !allo.stream<i32>)
     assert MODULE.canonical_pre_hls_ir(first) == MODULE.canonical_pre_hls_ir(rotated)
 
 
+def test_pre_hls_hash_ignores_frontend_debug_names_but_keeps_constants():
+    first = 'func.func @a() { %0 = "op"() {name = "a", loop_name = "i3", value = 7} : () -> i8 }'
+    renamed = 'func.func @b() { %x = "op"() {name = "b", loop_name = "j9", value = 7} : () -> i8 }'
+    changed = renamed.replace("value = 7", "value = 8")
+    assert MODULE.canonical_pre_hls_ir(first) == MODULE.canonical_pre_hls_ir(renamed)
+    assert MODULE.canonical_pre_hls_ir(first) != MODULE.canonical_pre_hls_ir(changed)
+
+
 def test_config_path_and_paired_json_tcl_output(tmp_path):
     config = MODULE.normalize_manifest_config(
         {"asic_manifest": {"enabled": True, "path": "graph.json"}}, str(tmp_path)
@@ -102,6 +110,29 @@ def test_config_path_and_paired_json_tcl_output(tmp_path):
         assert result.stdout.strip() == "pre_hls"
 
 
+def test_debug_config_writes_mlir_identity_and_canonical_inputs(tmp_path):
+    config = MODULE.normalize_manifest_config(
+        {
+            "asic_manifest": {
+                "debug_artifacts": True,
+                "debug_dir": "debug",
+            }
+        },
+        str(tmp_path),
+    )
+    functions = {"pe_0": "func.func @pe_0() { func.return }"}
+    identities = {"pe_0": {"kernel": "pe", "pid": [0], "mapping": [1]}}
+    MODULE.write_debug_artifact(config, "01-specialized.mlir", "module {}")
+    MODULE.write_pre_hls_debug_artifacts(config, functions, identities)
+    debug = tmp_path / "debug"
+    assert (debug / "01-specialized.mlir").is_file()
+    assert json.loads((debug / "identity-map.json").read_text()) == identities
+    canonical = debug / "canonical" / "pre-hls" / "pe_0.txt"
+    assert canonical.read_text().strip() == MODULE.canonical_pre_hls_ir(
+        functions["pe_0"]
+    )
+
+
 def test_mapping_rank_separates_pid_from_other_specialization_constants():
     semantic_id, kernel, pid = MODULE._semantic_identity(
         "top", "gemm_2_3_4_4_32_16", {"gemm": [4, 4]}
@@ -111,8 +142,40 @@ def test_mapping_rank_separates_pid_from_other_specialization_constants():
     assert pid == [2, 3]
 
 
-def test_nested_kernel_mapping_is_inferred_from_specialized_instances():
-    mappings = MODULE.infer_mappings(
-        {"gemm": {(0, 0): "corner", (0, 3): "edge", (2, 3): "compute"}}
+def test_explicit_identity_overrides_specialized_function_suffix():
+    manifest = MODULE.build_pre_hls_manifest(
+        top="top",
+        functions={"gemm_0_1_4_4_32_32_16_0": "func.func @f() { func.return }"},
+        stream_info={"gemm_0_1_4_4_32_32_16_0": []},
+        stream_types={},
+        extra_stream_info={},
+        identities={
+            "gemm_0_1_4_4_32_32_16_0": {
+                "kernel": "gemm",
+                "pid": [0, 1],
+                "mapping": [6, 6],
+                "parent_region": "MXU_4_4_32_32_16_0",
+            }
+        },
     )
-    assert mappings == {"gemm": [3, 4]}
+    pe = manifest["pe_instances"][0]
+    assert pe["semantic_id"] == "top/MXU_4_4_32_32_16_0/gemm/pid=0,1"
+    assert pe["pid"] == [0, 1]
+    assert pe["mapping"] == [6, 6]
+
+
+def test_repeated_stream_accesses_share_one_logical_endpoint():
+    manifest = MODULE.build_pre_hls_manifest(
+        top="top",
+        functions={"drain_0": "func.func @f() { func.return }"},
+        stream_info={"drain_0": [("fifo", "out"), ("fifo", "out")]},
+        stream_types={"fifo": "!allo.stream<i32, 2>"},
+        extra_stream_info={},
+    )
+    endpoints = manifest["channels"][0]["endpoints"]
+    assert len(endpoints) == 1
+    assert endpoints[0]["role"] == "producer"
+    assert endpoints[0]["accesses"] == [
+        {"port_ordinal": 0, "operation": "put"},
+        {"port_ordinal": 1, "operation": "put"},
+    ]

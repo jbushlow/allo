@@ -216,3 +216,83 @@ def test_tcl_manifest_uses_only_builtin_dict_and_list(tmp_path):
             ["tclsh", str(check)], check=True, capture_output=True, text=True
         )
         assert result.stdout.splitlines() == ["2", "pe/call=$1"]
+
+
+def test_pre_hls_identity_replaces_name_derived_pid_in_unified_manifest():
+    pre = {
+        "schema_version": 2,
+        "stage": "pre_hls",
+        "pe_instances": [
+            {
+                "semantic_id": "top/MXU/gemm/pid=0,1",
+                "kernel": "gemm",
+                "pid": [0, 1],
+                "specialized_function": "gemm_0_1_4_4_32_32_16_0",
+            }
+        ],
+        "channels": [],
+        "macro_groups": [],
+    }
+    record = {
+        "semantic_id": "gemm/pid=0,1",
+        "kernel": "gemm",
+        "pid": [0, 1],
+        "hls_function": "gemm_0_1_4_4_32_32_16_0_fixed",
+        "hls_equivalence_hash": "hls",
+        "rtl_equivalence_hash": "rtl",
+        "rtl_modules": [{"name": "pe", "file": "pe.v"}],
+        "status": "matched",
+    }
+    post = {
+        "schema_version": 1,
+        "inputs": {},
+        "records": [record],
+        "macro_groups": [],
+        "candidate_groups": [],
+        "summary": {
+            "selected_functions": 1,
+            "records": 1,
+            "matched": 1,
+            "empty_source": 0,
+            "unmatched_or_ambiguous": 0,
+            "macro_classes": 1,
+            "repeated_macro_classes": 0,
+            "instances_in_repeated_classes": 0,
+            "candidate_classes": 0,
+        },
+    }
+    merged = MODULE.merge_pre_hls_manifest(pre, post)
+    assert merged["stage"] == "post_hls_enriched"
+    assert merged["summary"]["joined_post_hls_records"] == 1
+    assert merged["post_hls_records"][0]["semantic_id"] == (
+        "top/MXU/gemm/pid=0,1"
+    )
+    assert merged["macro_groups"][0]["members"][0]["semantic_id"] == (
+        "top/MXU/gemm/pid=0,1"
+    )
+
+
+def test_debug_artifacts_are_exact_hash_inputs(tmp_path):
+    kernel = tmp_path / "kernel.cpp"
+    log = tmp_path / "solution1.log"
+    rtl = tmp_path / "syn" / "verilog"
+    _write(kernel, "void pe() { int generated = 1; }\n")
+    _write(log, "INFO: -- Generating RTL for module 'pe'\n")
+    _write(rtl / "top_pe.v", "module top_pe(); wire generated; endmodule\n")
+    manifest = MODULE.build_manifest(
+        kernel, log, rtl, MODULE.DEFAULT_MAPPED_RE, function_name="pe"
+    )
+    debug = tmp_path / "debug"
+    MODULE.write_debug_artifacts(debug, kernel, log, rtl, manifest)
+    hls_text = (debug / "canonical" / "hls" / "pe.txt").read_text().strip()
+    rtl_text = (
+        debug / "canonical" / "rtl" / "top_pe.txt"
+    ).read_text().strip()
+    function = MODULE.parse_cpp_functions(kernel.read_text())[0]
+    assert MODULE.hashlib.sha256(hls_text.encode()).hexdigest() == (
+        MODULE.canonical_hls_fingerprint(function)[0]
+    )
+    assert MODULE.hashlib.sha256(rtl_text.encode()).hexdigest() == (
+        MODULE.canonical_verilog_fingerprint((rtl / "top_pe.v").read_text())
+    )
+    assert (debug / "parsed-vitis-log.json").is_file()

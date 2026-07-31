@@ -23,7 +23,22 @@ def normalize_manifest_config(configs, project):
     path = os.path.expanduser(value.get("path", "asic-manifest.json"))
     if not os.path.isabs(path):
         path = os.path.join(project, path)
-    return {**value, "enabled": True, "path": os.path.abspath(path)}
+    path = os.path.abspath(path)
+    default_final = os.path.splitext(path)[0] + "-final.json"
+    final_path = os.path.expanduser(value.get("final_path", default_final))
+    if not os.path.isabs(final_path):
+        final_path = os.path.join(project, final_path)
+    debug_dir = os.path.expanduser(value.get("debug_dir", "asic-debug"))
+    if not os.path.isabs(debug_dir):
+        debug_dir = os.path.join(project, debug_dir)
+    return {
+        **value,
+        "enabled": True,
+        "path": path,
+        "final_path": os.path.abspath(final_path),
+        "debug_artifacts": bool(value.get("debug_artifacts", False)),
+        "debug_dir": os.path.abspath(debug_dir),
+    }
 
 
 def _sha256(value):
@@ -37,6 +52,13 @@ def canonical_pre_hls_ir(text):
     if body_start and "}" in text:
         text = text[body_start.end() : text.rfind("}")]
     text = re.sub(r"\bfunc\.return\b", "", text)
+    # These attributes are frontend/debug identifiers.  Operations, types,
+    # constants, control attributes, and stream behavior remain unchanged.
+    text = re.sub(
+        r'\b(loop_name|op_name|name)\s*=\s*"[^"]*"',
+        r'\1 = "<generated>"',
+        text,
+    )
     names = {}
 
     def rename(match):
@@ -48,7 +70,18 @@ def canonical_pre_hls_ir(text):
     return " ".join(text.split())
 
 
-def _semantic_identity(top, function_name, mappings):
+def _semantic_identity(top, function_name, mappings, identity=None):
+    if identity:
+        kernel = identity["kernel"]
+        pid = identity.get("pid")
+        parent = identity.get("parent_region")
+        path = [top]
+        if parent and parent != top:
+            path.append(parent)
+        path.append(kernel)
+        if pid is not None:
+            path.append(f"pid={','.join(map(str, pid))}")
+        return "/".join(path), kernel, pid
     match = re.match(r"(.+?)(_\d+(?:_\d+)*)$", function_name)
     if match:
         kernel = match.group(1).rstrip("_")
@@ -65,22 +98,9 @@ def _semantic_identity(top, function_name, mappings):
     return f"{top}/{function_name}", kernel, None
 
 
-def infer_mappings(func_instances):
-    """Infer each specialized kernel's rectangular PID extent."""
-    mappings = {}
-    for kernel, instances in (func_instances or {}).items():
-        pids = [pid for pid in instances if isinstance(pid, tuple)]
-        if not pids:
-            continue
-        rank = len(pids[0])
-        if rank and all(len(pid) == rank for pid in pids):
-            mappings[kernel] = [max(pid[axis] for pid in pids) + 1 for axis in range(rank)]
-    return mappings
-
-
 def build_pre_hls_manifest(
     *, top, functions, stream_info, stream_types, extra_stream_info,
-    func_instances=None, mappings=None, project=None,
+    func_instances=None, mappings=None, identities=None, project=None,
 ):
     """Build the serializable region graph from compiler-owned data.
 
@@ -89,13 +109,16 @@ def build_pre_hls_manifest(
     ``move_stream_to_interface``.
     """
     func_instances = func_instances or {}
-    inferred_mappings = infer_mappings(func_instances)
-    mappings = {**inferred_mappings, **(mappings or {})}
+    mappings = mappings or {}
+    identities = identities or {}
     extra_stream_info = extra_stream_info or {}
     pes = []
     channels = {}
     for function_name, endpoints in stream_info.items():
-        semantic_id, kernel, pid = _semantic_identity(top, function_name, mappings)
+        identity = identities.get(function_name)
+        semantic_id, kernel, pid = _semantic_identity(
+            top, function_name, mappings, identity
+        )
         body = canonical_pre_hls_ir(functions.get(function_name, ""))
         interface = sorted(
             (direction, str(stream_types.get(stream_name, "unknown")))
@@ -103,17 +126,22 @@ def build_pre_hls_manifest(
         )
         pe = {
             "semantic_id": semantic_id,
-            "region": top,
+            "region": (identity or {}).get("parent_region", top),
             "kernel": kernel,
             "specialized_function": function_name,
             "pid": pid,
-            "mapping": _json_value(mappings.get(kernel)),
-            "predicate_tag": None,
+            "mapping": _json_value(
+                (identity or {}).get("mapping", mappings.get(kernel))
+            ),
+            "specialization_suffix": (identity or {}).get(
+                "specialization_suffix"
+            ),
+            "predicate_tag": (identity or {}).get("predicate_tag"),
             "pre_hls_equivalence_hash": _sha256(body),
             "interface_hash": _sha256(json.dumps(interface, sort_keys=True)),
             "ports": [],
         }
-        if pid is not None:
+        if pid is not None and pe["predicate_tag"] is None:
             predicate = func_instances.get(kernel, {}).get(tuple(pid))
             if predicate is not None:
                 pe["predicate_tag"] = str(predicate)
@@ -141,15 +169,22 @@ def build_pre_hls_manifest(
                     "endpoints": [],
                 },
             )
-            channel["endpoints"].append(
+            endpoint_key = (semantic_id, direction)
+            endpoint = channel.setdefault("_endpoint_map", {}).setdefault(
+                endpoint_key,
                 {
                     "pe": semantic_id,
-                    "port_ordinal": ordinal,
                     "direction": direction,
-                    "operation": port["operation"],
-                }
+                    "role": "consumer" if direction == "in" else "producer",
+                    "accesses": [],
+                },
+            )
+            endpoint["accesses"].append(
+                {"port_ordinal": ordinal, "operation": port["operation"]}
             )
         pes.append(pe)
+    for channel in channels.values():
+        channel["endpoints"] = list(channel.pop("_endpoint_map").values())
     candidates = {}
     for pe in pes:
         key = (pe["pre_hls_equivalence_hash"], pe["interface_hash"])
@@ -245,3 +280,35 @@ def write_manifest(manifest, path):
         outfile.write("# Requires only Tcl built-in dict and list commands.\n")
         outfile.write(f"set allo_asic_manifest {_to_tcl(manifest)}\n")
     return path, tcl_path
+
+
+def write_debug_artifact(config, relative_path, text):
+    """Write one optional compiler/debug artifact under the configured root."""
+    if not config or not config.get("debug_artifacts"):
+        return None
+    path = os.path.join(config["debug_dir"], relative_path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as outfile:
+        outfile.write(text)
+        if text and not text.endswith("\n"):
+            outfile.write("\n")
+    return path
+
+
+def write_pre_hls_debug_artifacts(config, functions, identities):
+    """Write raw/canonical PE functions and the explicit identity side table."""
+    if not config or not config.get("debug_artifacts"):
+        return
+    identity_path = os.path.join(config["debug_dir"], "identity-map.json")
+    os.makedirs(os.path.dirname(identity_path), exist_ok=True)
+    with open(identity_path, "w", encoding="utf-8") as outfile:
+        json.dump(_json_value(identities), outfile, indent=2)
+        outfile.write("\n")
+    for function_name, text in functions.items():
+        filename = re.sub(r"[^A-Za-z0-9_.-]", "_", function_name)
+        write_debug_artifact(config, f"functions/{filename}.mlir", text)
+        write_debug_artifact(
+            config,
+            f"canonical/pre-hls/{filename}.txt",
+            canonical_pre_hls_ir(text),
+        )
