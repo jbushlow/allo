@@ -2104,7 +2104,13 @@ class ASTTransformer(ASTBuilder):
                                 )
                                 func_op.attributes["df.predicate_tag"] = (
                                     StringAttr.get(
-                                        str(freeze_list(new_ctx.predicate_list))
+                                        str(
+                                            freeze_list(
+                                                ctx.func_predicate_tags[
+                                                    orig_name
+                                                ][dim]
+                                            )
+                                        )
                                     )
                                 )
                                 if old_ctx.top_func is not None:

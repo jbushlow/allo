@@ -82,8 +82,8 @@ func.func @top(%south: !allo.stream<i32>, %north: !allo.stream<i32>)
 
 
 def test_pre_hls_hash_ignores_frontend_debug_names_but_keeps_constants():
-    first = 'func.func @a() { %0 = "op"() {name = "a", loop_name = "i3", value = 7} : () -> i8 }'
-    renamed = 'func.func @b() { %x = "op"() {name = "b", loop_name = "j9", value = 7} : () -> i8 }'
+    first = 'func.func @a() { %0 = "op"() {name = "a", loop_name = "i3", from = "a", to = "a", value = 7} : () -> i8 }'
+    renamed = 'func.func @b() { %x = "op"() {name = "b", loop_name = "j9", from = "b", to = "b", value = 7} : () -> i8 }'
     changed = renamed.replace("value = 7", "value = 8")
     assert MODULE.canonical_pre_hls_ir(first) == MODULE.canonical_pre_hls_ir(renamed)
     assert MODULE.canonical_pre_hls_ir(first) != MODULE.canonical_pre_hls_ir(changed)

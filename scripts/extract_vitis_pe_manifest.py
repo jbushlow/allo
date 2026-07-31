@@ -323,9 +323,12 @@ def _loop_process_candidates(
     for process in generated_modules:
         if "Pipeline_" not in process:
             continue
-        # The outer label is the durable join.  Prefer candidates that also
-        # contain the immediately nested label to avoid prefix collisions.
-        if re.search(rf"(?:^|_){re.escape(labels[0])}(?:_|$)", process):
+        # Vitis usually names a pipeline after the outer loop, but may flatten
+        # it and retain only a unique inner-loop label (for example ``k1``).
+        if any(
+            re.search(rf"(?:^|_){re.escape(label)}(?:_|$)", process)
+            for label in labels
+        ):
             candidates.append(process)
     return candidates
 

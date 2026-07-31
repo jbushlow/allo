@@ -55,7 +55,7 @@ def canonical_pre_hls_ir(text):
     # These attributes are frontend/debug identifiers.  Operations, types,
     # constants, control attributes, and stream behavior remain unchanged.
     text = re.sub(
-        r'\b(loop_name|op_name|name)\s*=\s*"[^"]*"',
+        r'\b(loop_name|op_name|name|from|to)\s*=\s*"[^"]*"',
         r'\1 = "<generated>"',
         text,
     )

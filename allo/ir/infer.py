@@ -787,6 +787,9 @@ class TypeInferer(ASTVisitor):
                                     node.name = construct_kernel_name(orig_name, dim)
                                     # check on a specific df.kernel instance
                                     TypeInferer.visit_FunctionDef(new_ctx, node)
+                                    old_ctx.func_predicate_tags[orig_name][dim] = (
+                                        new_ctx.predicate_list
+                                    )
                                     node.name = orig_name
                             else:
                                 # If not unroll, only visit one 'sample' to get the execution predicates

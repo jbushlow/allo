@@ -54,6 +54,32 @@ INFO: -- Generating RTL for module 'MXU_4_4_32_32_16_0_1_Pipeline_l_S_mt_nt_0_mt
     assert record["status"] == "matched"
 
 
+def test_inlined_function_can_map_through_inner_loop_label(tmp_path):
+    kernel = tmp_path / "kernel.cpp"
+    solution = tmp_path / "solution1"
+    log = solution / "solution1.log"
+    rtl = solution / "syn" / "verilog"
+    _write(
+        kernel,
+        """void load_0_0_fixed() {
+  outer: for (;;) {
+    inner7: for (;;) {}
+  }
+}
+""",
+    )
+    _write(
+        log,
+        "INFO: -- Generating RTL for module 'parent_Pipeline_inner7'\n",
+    )
+    _write(rtl / "pipeline.v", "module top_parent_Pipeline_inner7(); endmodule\n")
+    manifest = MODULE.build_manifest(
+        kernel, log, rtl, MODULE.DEFAULT_MAPPED_RE
+    )
+    assert manifest["records"][0]["status"] == "matched"
+    assert manifest["records"][0]["vitis_process"] == "parent_Pipeline_inner7"
+
+
 def test_repeated_hls_calls_map_to_clone_ordinals(tmp_path):
     kernel = tmp_path / "kernel.cpp"
     solution = tmp_path / "solution1"
