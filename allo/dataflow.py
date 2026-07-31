@@ -716,10 +716,19 @@ def build(
         stream_info, stream_types_dict, extra_stream_info = move_stream_to_interface(
             s, with_stream_type=True, with_extra_info=True
         )
-        functions = {
-            op.attributes["sym_name"].value: str(op)
-            for op in get_all_df_kernels(s)
-        }
+        functions = {}
+        for op in s.module.body.operations:
+            if isinstance(op, func_d.FuncOp) and "df.kernel" in op.attributes:
+                function_name = op.attributes["sym_name"].value
+                # Nested kernels are renamed after their stream interface is
+                # rebuilt, while stream_info intentionally retains the
+                # pre-rename semantic symbol used by the caller.
+                manifest_name = (
+                    function_name[: -len("_fixed")]
+                    if function_name.endswith("_fixed")
+                    else function_name
+                )
+                functions[manifest_name] = str(op)
         manifest = build_pre_hls_manifest(
             top=s.top_func_name,
             functions=functions,

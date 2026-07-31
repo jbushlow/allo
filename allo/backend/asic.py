@@ -65,6 +65,19 @@ def _semantic_identity(top, function_name, mappings):
     return f"{top}/{function_name}", kernel, None
 
 
+def infer_mappings(func_instances):
+    """Infer each specialized kernel's rectangular PID extent."""
+    mappings = {}
+    for kernel, instances in (func_instances or {}).items():
+        pids = [pid for pid in instances if isinstance(pid, tuple)]
+        if not pids:
+            continue
+        rank = len(pids[0])
+        if rank and all(len(pid) == rank for pid in pids):
+            mappings[kernel] = [max(pid[axis] for pid in pids) + 1 for axis in range(rank)]
+    return mappings
+
+
 def build_pre_hls_manifest(
     *, top, functions, stream_info, stream_types, extra_stream_info,
     func_instances=None, mappings=None, project=None,
@@ -75,8 +88,9 @@ def build_pre_hls_manifest(
     The other arguments are the concrete products of
     ``move_stream_to_interface``.
     """
-    mappings = mappings or {}
     func_instances = func_instances or {}
+    inferred_mappings = infer_mappings(func_instances)
+    mappings = {**inferred_mappings, **(mappings or {})}
     extra_stream_info = extra_stream_info or {}
     pes = []
     channels = {}

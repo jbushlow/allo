@@ -1,15 +1,15 @@
 # Copyright Allo authors. All Rights Reserved.
 # SPDX-License-Identifier: Apache-2.0
 
-import tempfile
+import json
 import os
+import subprocess
+import sys
+from pathlib import Path
 
-import pytest
 import allo
 from allo.ir.types import int8, int32, Stream, UInt, ConstExpr
-from allo.utils import get_np_struct_type
 import allo.dataflow as df
-import allo.backend.hls as hls
 import allo.dsl as dsl
 import numpy as np
 
@@ -196,7 +196,9 @@ def test_large_scale_gemm():
     np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
     print("Dataflow Simulator Passed!")
 
-    project = os.path.abspath("build/multi_cache_gemm_vitis")
+    project = Path("build/asic_flow").resolve()
+    pre_hls_manifest = project / "asic-manifest.json"
+    pre_hls_tcl = project / "asic-manifest.tcl"
 
     modc = df.build(
         top,
@@ -207,17 +209,59 @@ def test_large_scale_gemm():
         configs={
             "frequency": 100,
             "device": "u280",
+            "asic_manifest": {
+                "enabled": True,
+                "path": "asic-manifest.json",
+            },
         },
     )
 
     print(f"Generated Vitis project: {project}")
     print(f"Generated HLS source: {project}/kernel.cpp")
+    print(f"Generated pre-HLS ASIC manifest: {pre_hls_manifest}")
+
+    assert pre_hls_manifest.is_file()
+    assert pre_hls_tcl.is_file()
+    manifest = json.loads(pre_hls_manifest.read_text(encoding="utf-8"))
+    assert manifest["stage"] == "pre_hls"
+    assert manifest["pe_instances"]
+    assert manifest["channels"]
+    assert any(
+        group["member_count"] > 1 for group in manifest["candidate_groups"]
+    )
 
     if os.environ.get("RUN_VITIS") == "1":
         modc()
         print("Vitis HLS synthesis completed.")
+        rtl_manifest = project / "asic-rtl-manifest.json"
+        extractor = (
+            Path(__file__).parents[2]
+            / "scripts"
+            / "extract_vitis_pe_manifest.py"
+        )
+        subprocess.run(
+            [
+                sys.executable,
+                str(extractor),
+                "--kernel-cpp",
+                str(project / "kernel.cpp"),
+                "--solution-dir",
+                str(project / "out.prj" / "solution1"),
+                "--kernel",
+                "gemm",
+                "--output",
+                str(rtl_manifest),
+            ],
+            check=True,
+        )
+        assert rtl_manifest.is_file()
+        assert rtl_manifest.with_suffix(".tcl").is_file()
+        print(f"Generated post-HLS ASIC manifest: {rtl_manifest}")
     else:
-        print("Skipping Vitis; set RUN_VITIS=1 to run it.")
+        print(
+            "Skipping Vitis synthesis and RTL extraction; "
+            "set RUN_VITIS=1 to run them."
+        )
 
 
 if __name__ == "__main__":

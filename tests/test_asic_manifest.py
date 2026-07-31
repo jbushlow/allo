@@ -109,3 +109,10 @@ def test_mapping_rank_separates_pid_from_other_specialization_constants():
     assert semantic_id == "top/gemm/pid=2,3"
     assert kernel == "gemm"
     assert pid == [2, 3]
+
+
+def test_nested_kernel_mapping_is_inferred_from_specialized_instances():
+    mappings = MODULE.infer_mappings(
+        {"gemm": {(0, 0): "corner", (0, 3): "edge", (2, 3): "compute"}}
+    )
+    assert mappings == {"gemm": [3, 4]}
