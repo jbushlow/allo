@@ -27,6 +27,11 @@ from .ir.utils import (
 from .backend.simulator import LLVMOMPModule
 from .passes import df_pipeline
 from .backend import AIE_MLIRModule
+from .backend.asic import (
+    build_pre_hls_manifest,
+    normalize_manifest_config,
+    write_manifest,
+)
 
 
 def gather(pipes: list):
@@ -704,7 +709,31 @@ def build(
         s = customize(func)
         return LLVMOMPModule(s.module, s.top_func_name)
     # FPGA backend (vitis_hls, vivado_hls, tapa, ihls)
-    s = customize(func, enable_tensor=enable_tensor)
+    manifest_config = normalize_manifest_config(configs, project)
+    if manifest_config:
+        global_vars = get_global_vars(func)
+        s = _customize(func, global_vars=global_vars, enable_tensor=enable_tensor)
+        stream_info, stream_types_dict, extra_stream_info = move_stream_to_interface(
+            s, with_stream_type=True, with_extra_info=True
+        )
+        functions = {
+            op.attributes["sym_name"].value: str(op)
+            for op in get_all_df_kernels(s)
+        }
+        manifest = build_pre_hls_manifest(
+            top=s.top_func_name,
+            functions=functions,
+            stream_info=stream_info,
+            stream_types=stream_types_dict,
+            extra_stream_info=extra_stream_info,
+            func_instances=s.func_instances,
+            mappings=getattr(func, "mappings", {}),
+            project=project,
+        )
+        write_manifest(manifest, manifest_config["path"])
+        s = _build_top(s, stream_info)
+    else:
+        s = customize(func, enable_tensor=enable_tensor)
     hls_mod = s.build(
         target=target,
         mode=mode,
