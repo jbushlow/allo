@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import numpy as np
+import re
 from .utils import format_str
 from ..ir.transform import find_func_in_module
 from ..utils import get_func_inputs_outputs
@@ -160,6 +161,73 @@ def codegen_host(top, module):
     return out_str
 
 
+def discover_sub_functions(source, top):
+    """Find non-empty channel-processing functions that Catapult must block."""
+    functions = []
+    signature_re = re.compile(r"\bvoid\s+([A-Za-z_]\w*)\s*\((.*?)\)\s*\{", re.S)
+    for match in signature_re.finditer(source):
+        name, parameters = match.group(1), match.group(2)
+        if name == top or "ac_channel<" not in parameters:
+            continue
+        depth = 1
+        cursor = match.end()
+        while cursor < len(source) and depth:
+            if source[cursor] == "{":
+                depth += 1
+            elif source[cursor] == "}":
+                depth -= 1
+            cursor += 1
+        body = source[match.end() : cursor - 1]
+        if re.search(r"\.\s*(?:read|write)\s*\(", body):
+            functions.append(name)
+    return list(dict.fromkeys(functions))
+
+
+def discover_stream_depths(module, top, source):
+    """Join top-level MLIR streams to emitted Catapult channel resources.
+
+    The Catapult emitter preserves ``allo.stream_construct`` order when it
+    emits top-level ``static ac_channel`` declarations. Validate that join so
+    generated identifiers never receive another stream's depth by accident.
+    """
+    func = find_func_in_module(module, top)
+    stream_depths = [
+        int(match.group(1))
+        for match in re.finditer(
+            r"allo\.stream_construct\(\).*?:\s*!allo\.stream<[^\n]*,\s*(\d+)>",
+            str(func),
+        )
+    ]
+    if not stream_depths:
+        return []
+
+    signature = re.search(
+        rf"\bvoid\s+{re.escape(top)}\s*\(.*?\)\s*\{{", source, re.S
+    )
+    if signature is None:
+        raise ValueError(f"cannot find emitted Catapult top function {top!r}")
+    brace_depth = 1
+    cursor = signature.end()
+    while cursor < len(source) and brace_depth:
+        if source[cursor] == "{":
+            brace_depth += 1
+        elif source[cursor] == "}":
+            brace_depth -= 1
+        cursor += 1
+    if brace_depth:
+        raise ValueError(f"unterminated emitted Catapult top function {top!r}")
+    body = source[signature.end() : cursor - 1]
+    channel_names = re.findall(
+        r"\bstatic\s+ac_channel\s*<[^;\n]+>\s+([A-Za-z_]\w*)\s*;", body
+    )
+    if len(channel_names) != len(stream_depths):
+        raise ValueError(
+            "Catapult stream-depth join failed: "
+            f"MLIR declares {len(stream_depths)} streams but emitted top "
+            f"declares {len(channel_names)} static ac_channel resources"
+        )
+    return list(zip(channel_names, stream_depths))
+
 
 def codegen_tcl(top, configs):
     """Generate TCL script for Catapult HLS synthesis.
@@ -167,8 +235,16 @@ def codegen_tcl(top, configs):
     Generates a hierarchical synthesis flow that preserves module boundaries
     so that per-PE and per-interconnect area/power can be extracted from reports.
     """
-    frequency = configs.get("frequency", 100)
-    clock_period = 1000 / frequency
+    if configs.get("clock_period") is not None:
+        clock_period = float(configs["clock_period"])
+    else:
+        frequency = configs.get("frequency", 100)
+        clock_period = 1000 / frequency
+    clock_period_str = (
+        f"{clock_period:.1f}"
+        if abs(clock_period - round(clock_period, 1)) < 1e-9
+        else f"{clock_period:.3f}"
+    )
     mode = configs.get("mode", "csyn")
     device = configs.get("device", "nangate-45nm_beh")
     # preserve_hier=True keeps sub-function boundaries in RTL output,
@@ -201,7 +277,7 @@ solution file add "$sfd/kernel.cpp" -type C++
 directive set -DESIGN_HIERARCHY {top}
 
 # Set clock constraints
-directive set -CLOCKS {{clk {{-CLOCK_PERIOD {clock_period:.1f}}}}}
+directive set -CLOCKS {{clk {{-CLOCK_PERIOD {clock_period_str}}}}}
 
 # Set output language
 solution options set /Output/OutputVerilog true
@@ -221,6 +297,15 @@ solution options set /Output/OutputVHDL false
 go analyze
 """
 
+    # ac_channel does not carry Allo's declared Stream depth in its C++ type.
+    # Constrain each analyzed Catapult channel resource explicitly.
+    for channel, depth in configs.get("stream_depths", []):
+        out_str += (
+            f"directive set /{top}/{channel}:cns -FIFO_DEPTH {int(depth)}\n"
+        )
+    if configs.get("stream_depths"):
+        out_str += "\n"
+
     # Block synthesis: keep sub-functions as separate RTL modules so channels
     # cross hierarchical boundaries (avoids HIER-10/HIER-47 errors).
     if sub_funcs:
@@ -229,7 +314,6 @@ go analyze
         out_str += "\n"
 
     out_str += "go compile\n"
-
 
     if mode == "csim":
         out_str += """
@@ -394,15 +478,11 @@ def parse_catapult_hierarchical_report(project_path, top):
         )
 
     # Infer interconnect cost = top - sum(compute modules)
-    module_area_sum = sum(
-        v.get("area", 0) for v in result["modules"].values()
-    )
+    module_area_sum = sum(v.get("area", 0) for v in result["modules"].values())
     if isinstance(top_area, float) and module_area_sum > 0:
         interconnect = top_area - module_area_sum
         lines.append("-" * 60)
-        lines.append(
-            f"  {'[Interconnect/Overhead]':<33} {interconnect:>10.2f} {'':>8}"
-        )
+        lines.append(f"  {'[Interconnect/Overhead]':<33} {interconnect:>10.2f} {'':>8}")
 
     result["summary"] = "\n".join(lines)
     return result

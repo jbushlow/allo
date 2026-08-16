@@ -52,6 +52,8 @@ from .ir.visitor import ASTContext
 from .ir.utils import MockArg, MockBuffer, parse_ast, get_global_vars
 from .ir.builder import ASTTransformer
 from .ir.infer import TypeInferer
+from .ir.pid_generalization import generalize_pid_uses
+from .ir.types import UInt
 from .ir.transform import (
     get_affine_loop_nests,
     find_loop_in_bands,
@@ -1339,6 +1341,7 @@ def customize(
     context: Context = None,
     typing_rule_set: str = "default",
     unroll: bool = True,
+    pid_generalization_policy: str = None,
 ) -> Schedule:
     """
     Args:
@@ -1351,10 +1354,13 @@ def customize(
     # Get Python AST
     file_name = None if isinstance(fn, str) else inspect.getfile(fn)
     tree = parse_ast(fn, verbose=verbose)
-    if instantiate is None:
-        instantiate = []
     if global_vars is None:
         global_vars = get_global_vars(fn)
+    global_vars.setdefault("UInt", UInt)
+    if pid_generalization_policy is not None:
+        tree = generalize_pid_uses(tree, global_vars, pid_generalization_policy)
+    if instantiate is None:
+        instantiate = []
     # Type construction
     ctx_type_inf = ASTContext(
         tree=tree,

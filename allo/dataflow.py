@@ -15,9 +15,10 @@ from ._mlir.ir import (
     StringAttr,
     FunctionType,
     MemRefType,
+    IntegerAttr,
     Type,
 )
-from ._mlir.dialects import func as func_d, allo as allo_d
+from ._mlir.dialects import func as func_d, allo as allo_d, arith as arith_d
 from ._mlir.passmanager import PassManager as mlir_pass_manager
 from .customize import customize as _customize, Schedule
 from .utils import parse_kernel_name, construct_kernel_name
@@ -26,7 +27,7 @@ from .ir.utils import (
     get_global_vars,
 )
 from .backend.simulator import LLVMOMPModule
-from .passes import df_pipeline
+from .passes import analyze_arg_load_store, df_pipeline
 from .backend import AIE_MLIRModule
 from .backend.asic import (
     build_pre_hls_manifest,
@@ -130,7 +131,11 @@ def move_stream_to_interface(
                     ):
                         # These don't strictly define direction, but we need to choose one
                         # to avoid the error. Default to 'in' for empty (consumer) and 'out' for full (producer)
-                        direction = "in" if isinstance(use.owner, allo_d.StreamEmptyOp) else "out"
+                        direction = (
+                            "in"
+                            if isinstance(use.owner, allo_d.StreamEmptyOp)
+                            else "out"
+                        )
                     else:
                         raise ValueError(f"Stream is not used correctly: {use.owner}")
                 if with_stream_type and stream_name not in stream_types_dict:
@@ -276,6 +281,8 @@ def move_stream_to_interface(
                 "df.specialization_suffix",
                 "df.predicate_tag",
                 "df.selected_branch_trace",
+                "df.pid_generalization_policy",
+                "df.pid_generalized_axes",
             ):
                 if attr_name in func.attributes:
                     new_func.attributes[attr_name] = func.attributes[attr_name]
@@ -338,7 +345,11 @@ def move_stream_to_interface(
                     elif isinstance(
                         use.owner, (allo_d.StreamEmptyOp, allo_d.StreamFullOp)
                     ):
-                        direction = "in" if isinstance(use.owner, allo_d.StreamEmptyOp) else "out"
+                        direction = (
+                            "in"
+                            if isinstance(use.owner, allo_d.StreamEmptyOp)
+                            else "out"
+                        )
                     else:
                         raise ValueError(f"Stream is not used correctly: {use.owner}")
                 stream_name = op.attributes["name"].value
@@ -387,6 +398,8 @@ def move_stream_to_interface(
                 "df.specialization_suffix",
                 "df.predicate_tag",
                 "df.selected_branch_trace",
+                "df.pid_generalization_policy",
+                "df.pid_generalized_axes",
             ):
                 if attr_name in func.attributes:
                     new_func.attributes[attr_name] = func.attributes[attr_name]
@@ -491,7 +504,43 @@ def remove_unused_func_ops(s, func_names):
             func_op.erase()
 
 
-def _build_top(s, stream_info, enable_layout=False):
+def _build_manifest_top_arguments(
+    source_arguments, realized_names, argument_directions, direction_names
+):
+    """Build semantic argument records in the order realized by dataflow lowering."""
+    arguments_by_name = {}
+    for ordinal, argument in enumerate(source_arguments):
+        name = argument.name or f"arg{ordinal}"
+        arguments_by_name[name] = argument
+        if argument.top_name is not None:
+            arguments_by_name[argument.top_name] = argument
+
+    records = []
+    for ordinal, name in enumerate(realized_names):
+        if name not in arguments_by_name:
+            raise RuntimeError(
+                f"Cannot match lowered top argument '{name}' to the dataflow "
+                "region signature while generating the ASIC manifest."
+            )
+        argument = arguments_by_name[name]
+        records.append(
+            {
+                "ordinal": ordinal,
+                "name": name,
+                "shape": list(argument.shape),
+                "type": str(argument.dtype),
+                "direction": direction_names.get(
+                    argument_directions[ordinal]
+                    if ordinal < len(argument_directions)
+                    else None,
+                    "unknown",
+                ),
+            }
+        )
+    return records
+
+
+def _build_top(s, stream_info, enable_layout=False, top_arg_names=None):
     """
     s: top-level schedule
     stream_info: {func_name: [(stream_names, direction)]}
@@ -517,8 +566,25 @@ def _build_top(s, stream_info, enable_layout=False):
     for func in funcs:
         func_name = func.attributes["sym_name"].value
         arg_mapping[func_name] = []
+        generalized_axes = []
+        if "df.pid_generalized_axes" in func.attributes:
+            generalized_axes = [
+                int(value)
+                for value in func.attributes["df.pid_generalized_axes"].value.split(",")
+                if value
+            ]
+        nonstream_args = [
+            arg for arg in func.arguments if "!allo.stream" not in str(arg.type)
+        ]
+        pid_arg_start = len(nonstream_args) - len(generalized_axes)
+        nonstream_index = 0
         for i, arg in enumerate(func.arguments):
             if "!allo.stream" not in str(arg.type):
+                if nonstream_index >= pid_arg_start and generalized_axes:
+                    axis = generalized_axes[nonstream_index - pid_arg_start]
+                    arg_mapping[func_name].append(("pid", axis, arg.type))
+                    nonstream_index += 1
+                    continue
                 dtensor = s.func_args[func_name][i]
                 # Key dedup on the region-level bound name (`top_name`), not the
                 # kernel-local param name (`name`): two kernels may reuse a local
@@ -531,7 +597,10 @@ def _build_top(s, stream_info, enable_layout=False):
                     input_types.append((dtensor.shape, dtensor.dtype))
                     if "itypes" in func.attributes:
                         input_signed += func.attributes["itypes"].value[i]
-                arg_mapping[func_name].append(used_args[arg_name])
+                arg_mapping[func_name].append(("top", used_args[arg_name]))
+                nonstream_index += 1
+    if top_arg_names is not None:
+        top_arg_names.extend(used_args)
     # update top function
     top_func = None
     for func in s.module.body.operations:
@@ -567,7 +636,22 @@ def _build_top(s, stream_info, enable_layout=False):
         # add call functions
         for i, func in enumerate(funcs):
             func_name = func.attributes["sym_name"].value
-            arg_lst = [new_top.arguments[idx] for idx in arg_mapping[func_name]]
+            pid = []
+            if "df.pid" in func.attributes:
+                pid = [int(value) for value in func.attributes["df.pid"].value.split(",")]
+            arg_lst = []
+            for mapping in arg_mapping[func_name]:
+                if mapping[0] == "top":
+                    arg_lst.append(new_top.arguments[mapping[1]])
+                else:
+                    _, axis, arg_type = mapping
+                    arg_lst.append(
+                        arith_d.ConstantOp(
+                            arg_type,
+                            IntegerAttr.get(arg_type, pid[axis]),
+                            ip=InsertionPoint.at_block_terminator(new_top.entry_block),
+                        ).result
+                    )
             stream_lst = [
                 stream_map[stream_name] for stream_name, _ in stream_info[func_name]
             ]
@@ -736,13 +820,21 @@ def build(
     # FPGA backend (vitis_hls, vivado_hls, tapa, ihls)
     manifest_config = normalize_manifest_config(configs, project)
     build_configs = dict(configs or {})
+    pid_generalization_policy = None
+    if build_configs.get("generalize_pid_specializations", False):
+        pid_generalization_policy = build_configs.get(
+            "pid_generalization_policy", "identity_only"
+        )
     if manifest_config:
         build_configs["asic_manifest"] = manifest_config
         global_vars = get_global_vars(func)
-        s = _customize(func, global_vars=global_vars, enable_tensor=enable_tensor)
-        write_debug_artifact(
-            manifest_config, "01-specialized.mlir", str(s.module)
+        s = _customize(
+            func,
+            global_vars=global_vars,
+            enable_tensor=enable_tensor,
+            pid_generalization_policy=pid_generalization_policy,
         )
+        write_debug_artifact(manifest_config, "01-specialized.mlir", str(s.module))
         stream_info, stream_types_dict, extra_stream_info = move_stream_to_interface(
             s, with_stream_type=True, with_extra_info=True
         )
@@ -769,9 +861,7 @@ def build(
                     identities[manifest_name] = {
                         "kernel": op.attributes["df.kernel_name"].value,
                         "pid": [int(value) for value in pid_text.split(",")],
-                        "mapping": [
-                            int(value) for value in mapping_text.split(",")
-                        ],
+                        "mapping": [int(value) for value in mapping_text.split(",")],
                         "parent_region": (
                             op.attributes["df.parent_region"].value
                             if "df.parent_region" in op.attributes
@@ -780,16 +870,39 @@ def build(
                         "specialization_suffix": op.attributes[
                             "df.specialization_suffix"
                         ].value,
-                        "predicate_tag": op.attributes[
-                            "df.predicate_tag"
-                        ].value,
-                        "selected_branch_trace": ast.literal_eval(
-                            op.attributes["df.selected_branch_trace"].value
-                        )
-                        if "df.selected_branch_trace" in op.attributes
-                        else [],
+                        "predicate_tag": op.attributes["df.predicate_tag"].value,
+                        "selected_branch_trace": (
+                            ast.literal_eval(
+                                op.attributes["df.selected_branch_trace"].value
+                            )
+                            if "df.selected_branch_trace" in op.attributes
+                            else []
+                        ),
+                        "pid_generalization_policy": (
+                            op.attributes["df.pid_generalization_policy"].value
+                            if "df.pid_generalization_policy" in op.attributes
+                            else None
+                        ),
+                        "pid_generalized_axes": (
+                            [
+                                int(value)
+                                for value in op.attributes[
+                                    "df.pid_generalized_axes"
+                                ].value.split(",")
+                                if value
+                            ]
+                            if "df.pid_generalized_axes" in op.attributes
+                            else []
+                        ),
                     }
         write_pre_hls_debug_artifacts(manifest_config, functions, identities)
+        realized_top_arg_names = []
+        s = _build_top(s, stream_info, top_arg_names=realized_top_arg_names)
+        write_debug_artifact(manifest_config, "03-dataflow-top.mlir", str(s.module))
+        argument_directions = analyze_arg_load_store(s.module).get(
+            s.top_func_name, []
+        )
+        direction_names = {"in": "input", "out": "output", "both": "inout"}
         manifest = build_pre_hls_manifest(
             top=s.top_func_name,
             functions=functions,
@@ -800,14 +913,21 @@ def build(
             mappings=getattr(func, "mappings", {}),
             identities=identities,
             project=project,
+            top_arguments=_build_manifest_top_arguments(
+                s.func_args.get(s.top_func_name, []),
+                realized_top_arg_names,
+                argument_directions,
+                direction_names,
+            ),
         )
         write_manifest(manifest, manifest_config["path"])
-        s = _build_top(s, stream_info)
-        write_debug_artifact(
-            manifest_config, "03-dataflow-top.mlir", str(s.module)
-        )
     else:
-        s = customize(func, enable_tensor=enable_tensor)
+        s = _customize(
+            func,
+            global_vars=get_global_vars(func),
+            enable_tensor=enable_tensor,
+            pid_generalization_policy=pid_generalization_policy,
+        )
     hls_mod = s.build(
         target=target,
         mode=mode,

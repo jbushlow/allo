@@ -9,6 +9,7 @@ import json
 import os
 import re
 
+
 def normalize_manifest_config(configs, project):
     """Validate and resolve ``configs["asic_manifest"]``."""
     value = (configs or {}).get("asic_manifest")
@@ -99,8 +100,17 @@ def _semantic_identity(top, function_name, mappings, identity=None):
 
 
 def build_pre_hls_manifest(
-    *, top, functions, stream_info, stream_types, extra_stream_info,
-    func_instances=None, mappings=None, identities=None, project=None,
+    *,
+    top,
+    functions,
+    stream_info,
+    stream_types,
+    extra_stream_info,
+    func_instances=None,
+    mappings=None,
+    identities=None,
+    project=None,
+    top_arguments=None,
 ):
     """Build the serializable region graph from compiler-owned data.
 
@@ -133,12 +143,14 @@ def build_pre_hls_manifest(
             "mapping": _json_value(
                 (identity or {}).get("mapping", mappings.get(kernel))
             ),
-            "specialization_suffix": (identity or {}).get(
-                "specialization_suffix"
-            ),
+            "specialization_suffix": (identity or {}).get("specialization_suffix"),
             "predicate_tag": (identity or {}).get("predicate_tag"),
-            "selected_branch_trace": (identity or {}).get(
-                "selected_branch_trace", []
+            "selected_branch_trace": (identity or {}).get("selected_branch_trace", []),
+            "pid_generalization_policy": (identity or {}).get(
+                "pid_generalization_policy"
+            ),
+            "pid_generalized_axes": (identity or {}).get(
+                "pid_generalized_axes", []
             ),
             "pre_hls_equivalence_hash": _sha256(body),
             "interface_hash": _sha256(json.dumps(interface, sort_keys=True)),
@@ -185,31 +197,58 @@ def build_pre_hls_manifest(
             endpoint["accesses"].append(
                 {"port_ordinal": ordinal, "operation": port["operation"]}
             )
+        implementation_contract = {
+            "schema_version": 1,
+            "canonical_specialized_mlir_hash": pe["pre_hls_equivalence_hash"],
+            "stream_interface": sorted(
+                [
+                {
+                    "direction": port["direction"],
+                    "operation": port["operation"],
+                    "blocking": port["blocking"],
+                    # The stream type includes element type and declared depth.
+                    "type": port["type"],
+                }
+                for port in pe["ports"]
+                ],
+                key=lambda item: json.dumps(item, sort_keys=True),
+            ),
+            "mapping": pe["mapping"],
+            "specialization_suffix": pe["specialization_suffix"],
+            "predicate_tag": pe["predicate_tag"],
+            "selected_branch_trace": pe["selected_branch_trace"],
+            "pid_generalization_policy": pe["pid_generalization_policy"],
+            "pid_generalized_axes": pe["pid_generalized_axes"],
+        }
+        pe["pre_hls_implementation_contract"] = implementation_contract
+        pe["pre_hls_implementation_contract_hash"] = _sha256(
+            json.dumps(implementation_contract, sort_keys=True)
+        )
         pes.append(pe)
     for channel in channels.values():
         channel["endpoints"] = list(channel.pop("_endpoint_map").values())
     candidates = {}
     for pe in pes:
-        key = (pe["pre_hls_equivalence_hash"], pe["interface_hash"])
+        key = pe["pre_hls_implementation_contract_hash"]
         candidates.setdefault(key, []).append(pe["semantic_id"])
     candidate_groups = [
         {
-            "candidate_class_id": f"pre_hls_candidate_{body_hash[:16]}",
+            "candidate_class_id": f"pre_hls_candidate_{contract_hash[:16]}",
             "members": members,
             "member_count": len(members),
             "evidence": {
-                "pre_hls_equivalence_hash": body_hash,
-                "interface_hash": interface_hash,
+                "pre_hls_implementation_contract_hash": contract_hash,
             },
-            "status": "candidate_until_post_hls_rtl_equivalence",
+            "status": "awaiting_emitted_hls_contract",
         }
-        for (body_hash, interface_hash), members in sorted(candidates.items())
+        for contract_hash, members in sorted(candidates.items())
     ]
     return {
         "schema_version": 2,
         "stage": "pre_hls",
         "top": top,
         "project": project,
+        "top_arguments": top_arguments or [],
         "pe_instances": pes,
         "channels": list(channels.values()),
         "macro_groups": [],
@@ -258,16 +297,22 @@ def _to_tcl(value, indent=0):
     if isinstance(value, list):
         if not value:
             return "[list]"
-        return "[list \\\n" + " \\\n".join(
-            f"{child}{_to_tcl(item, indent + 2)}" for item in value
-        ) + f"\n{pad}]"
+        return (
+            "[list \\\n"
+            + " \\\n".join(f"{child}{_to_tcl(item, indent + 2)}" for item in value)
+            + f"\n{pad}]"
+        )
     if isinstance(value, dict):
         if not value:
             return "[dict create]"
-        return "[dict create \\\n" + " \\\n".join(
-            f"{child}{_tcl_string(str(key))} {_to_tcl(item, indent + 2)}"
-            for key, item in value.items()
-        ) + f"\n{pad}]"
+        return (
+            "[dict create \\\n"
+            + " \\\n".join(
+                f"{child}{_tcl_string(str(key))} {_to_tcl(item, indent + 2)}"
+                for key, item in value.items()
+            )
+            + f"\n{pad}]"
+        )
     raise TypeError(f"unsupported Tcl manifest value: {type(value).__name__}")
 
 

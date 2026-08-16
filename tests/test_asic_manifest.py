@@ -55,6 +55,10 @@ def test_pre_hls_equivalence_ignores_generated_names_and_orientation():
     assert first["pre_hls_equivalence_hash"] == second["pre_hls_equivalence_hash"]
     assert first["interface_hash"] == second["interface_hash"]
     assert manifest["candidate_groups"][0]["member_count"] == 2
+    assert (
+        first["pre_hls_implementation_contract_hash"]
+        == second["pre_hls_implementation_contract_hash"]
+    )
     assert all(
         port["desired_compass_direction"] == "unassigned"
         for pe in manifest["pe_instances"] for port in pe["ports"]
@@ -79,6 +83,49 @@ func.func @top(%south: !allo.stream<i32>, %north: !allo.stream<i32>)
 }
 """
     assert MODULE.canonical_pre_hls_ir(first) == MODULE.canonical_pre_hls_ir(rotated)
+
+
+def test_pre_hls_contract_keeps_stream_depth_and_blocking_protocol():
+    shallow = _manifest()
+    deep = MODULE.build_pre_hls_manifest(
+        top="region",
+        functions={
+            "loader_0_1": "func.func @loader_0_1(%arg0: i32) { %x = arith.addi %arg0, %arg0 : i32 }",
+        },
+        stream_info={"loader_0_1": [("fifo", "in")]},
+        stream_types={"fifo": "!allo.stream<i32, 8>"},
+        extra_stream_info={},
+        mappings={"loader": [2, 2]},
+    )
+    assert (
+        shallow["pe_instances"][0]["pre_hls_implementation_contract_hash"]
+        != deep["pe_instances"][0]["pre_hls_implementation_contract_hash"]
+    )
+
+
+def test_pre_hls_contract_records_pid_generalization_policy():
+    manifest = MODULE.build_pre_hls_manifest(
+        top="region",
+        functions={"pe_0": "func.func @pe_0() { func.return }"},
+        stream_info={"pe_0": []},
+        stream_types={},
+        extra_stream_info={},
+        identities={
+            "pe_0": {
+                "kernel": "pe",
+                "pid": [0],
+                "mapping": [2],
+                "pid_generalization_policy": "identity_only",
+                "pid_generalized_axes": [0],
+            }
+        },
+    )
+    pe = manifest["pe_instances"][0]
+    assert pe["pid_generalization_policy"] == "identity_only"
+    assert pe["pid_generalized_axes"] == [0]
+    assert pe["pre_hls_implementation_contract"]["pid_generalization_policy"] == (
+        "identity_only"
+    )
 
 
 def test_pre_hls_hash_ignores_frontend_debug_names_but_keeps_constants():

@@ -762,6 +762,7 @@ bool ExprVisitor::visitOp(allo::CmpFixedOp op) {
 
 /// SCF statement emitters.
 void allo::hls::VhlsModuleEmitter::emitScfFor(scf::ForOp op) {
+  emitLoopDirectivesPreheader(op);
   indent();
   os << "for (";
   auto iterVar = op.getInductionVar();
@@ -963,6 +964,7 @@ void allo::hls::VhlsModuleEmitter::emitScfYield(scf::YieldOp op) {
 
 /// Affine statement emitters.
 void allo::hls::VhlsModuleEmitter::emitAffineFor(AffineForOp op) {
+  emitLoopDirectivesPreheader(op);
   indent();
   auto iterVar = op.getInductionVar();
   std::string loop_name = "";
@@ -2373,6 +2375,7 @@ void allo::hls::VhlsModuleEmitter::emitCast(CastOpType op) {
   emitValue(result);
   os << " = ";
   emitValue(op.getOperand());
+  emitNarrowCastSuffix(op.getOperand(), op.getResult());
   os << ";";
   emitInfoAndNewLine(op);
 }

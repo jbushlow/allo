@@ -18,12 +18,25 @@ from __future__ import annotations
 import argparse
 import copy
 import hashlib
+import importlib.util
 import json
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+
+
+def _load_rtl_canonicalizer():
+    path = Path(__file__).with_name("rtl_canonicalizer.py")
+    spec = importlib.util.spec_from_file_location("_allo_rtl_canonicalizer", path)
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+RTLCanonicalizer = _load_rtl_canonicalizer().RTLCanonicalizer
 
 
 DEFAULT_MAPPED_RE = (
@@ -113,7 +126,7 @@ def parse_cpp_functions(text: str) -> list[CFunction]:
                 continue
             parameter = identifiers[-1]
             parameter_type = re.sub(
-                rf"\b{re.escape(parameter)}\b(?=\s*(?:\[[^]]*\]\s*)?$)",
+                rf"\b{re.escape(parameter)}\b(?=\s*(?:\[[^]]*\]\s*)*$)",
                 "",
                 declaration.strip(),
             )
@@ -208,6 +221,31 @@ def canonical_hls_fingerprint(function: CFunction) -> tuple[str, dict]:
     return hashlib.sha256(serialized.encode()).hexdigest(), interface
 
 
+def _implementation_contract(record: dict) -> dict:
+    """Return the complete available contract used to share one implementation."""
+    return {
+        "schema_version": 1,
+        "pre_hls_contract_hash": record.get(
+            "pre_hls_implementation_contract_hash"
+        ),
+        "emitted_hls_hash": record.get("hls_equivalence_hash"),
+        "emitted_hls_interface": record.get(
+            "hls_interface_signature", record.get("hls_interface")
+        ),
+        "hierarchy_mode": record.get("mapping_mode"),
+        "synthesis": record.get("synthesis_contract", {}),
+    }
+
+
+def attach_implementation_contract(record: dict) -> None:
+    contract = _implementation_contract(record)
+    serialized = json.dumps(contract, sort_keys=True, separators=(",", ":"))
+    record["implementation_contract"] = contract
+    record["implementation_equivalence_hash"] = hashlib.sha256(
+        serialized.encode()
+    ).hexdigest()
+
+
 VERILOG_KEYWORDS = {
     "always", "and", "assign", "automatic", "begin", "buf", "case", "casex",
     "casez", "default", "else", "end", "endcase", "endfunction", "endgenerate",
@@ -219,29 +257,13 @@ VERILOG_KEYWORDS = {
 
 
 def canonical_verilog_serialization(text: str) -> str:
-    """Return RTL tokens modulo comments and generated identifiers."""
-    text = re.sub(r"//[^\n]*|/\*.*?\*/", " ", text, flags=re.DOTALL)
-    own_modules = set(re.findall(r"(?m)^\s*module\s+([A-Za-z_][\w$]*)", text))
-    instantiated_types = set(
-        re.findall(
-            r"(?m)(?:^|;)\s*([A-Za-z_][\w$]*)\s+(?:#\s*\([^;]*?\)\s*)?"
-            r"[A-Za-z_][\w$]*\s*\(",
-            text,
-        )
-    )
-    # A referenced child-module type is a semantic global symbol, not a local
-    # generated identifier.  Preserve it unless its definition is in this text;
-    # this may miss some recursive-equivalence opportunities but cannot merge
-    # modules merely because two different child types occur in the same place.
-    fixed = VERILOG_KEYWORDS | (instantiated_types - own_modules)
-    tokens, _ = _alpha_tokens(text, fixed)
-    return " ".join(tokens)
+    """Return a conservative structural serialization of generated RTL."""
+    return RTLCanonicalizer().serialization(text)
 
 
-def canonical_verilog_fingerprint(text: str) -> str:
+def canonical_verilog_fingerprint(text: str, backend: str | None = None) -> str:
     """Hash RTL modulo comments and generated identifiers."""
-    serialized = canonical_verilog_serialization(text)
-    return hashlib.sha256(serialized.encode()).hexdigest()
+    return RTLCanonicalizer(backend=backend).fingerprint(text)
 
 
 def parse_vitis_log(text: str) -> dict:
@@ -271,6 +293,108 @@ def parse_vitis_log(text: str) -> dict:
         "generated_modules": generated,
         "dataflow_processes": list(dict.fromkeys(processes)),
     }
+
+
+def parse_vitis_synthesis_contract(text: str) -> dict:
+    version = re.search(r"Vitis HLS.*?\bv([0-9][^\s(]*)", text)
+    part = re.search(r"Running:\s+set_part\s+\{?([^\s}]+)", text)
+    clock = re.search(r"Running:\s+create_clock\s+-period\s+([0-9.]+)", text)
+    return {
+        "backend": "vitis_hls",
+        "tool_version": version.group(1) if version else "unknown",
+        "target_part": part.group(1) if part else "unknown",
+        "clock_period_ns": float(clock.group(1)) if clock else None,
+        "hierarchy_policy": "vitis_dataflow_process",
+    }
+
+
+def extract_rtl_hierarchy(artifacts: dict[str, str], top: str | None = None) -> dict:
+    """Parse module definitions and realized instance paths from Verilog text."""
+    module_re = re.compile(
+        r"(?ms)^\s*module\s+([A-Za-z_][\w$]*)\b.*?\bendmodule\b"
+    )
+    blocks = {}
+    sources = {}
+    for source, text in sorted(artifacts.items()):
+        for match in module_re.finditer(text):
+            name = match.group(1)
+            blocks[name] = match.group(0)
+            sources[name] = source
+
+    instances = []
+    known = set(blocks)
+    instance_re = re.compile(
+        r"(?m)(?:^|;)\s*([A-Za-z_][\w$]*)"
+        r"(?:\s*#\s*\([^;]*?\))?\s+([A-Za-z_][\w$]*)\s*\(",
+        re.DOTALL,
+    )
+    for parent, text in blocks.items():
+        for child, instance_name in instance_re.findall(text):
+            if child not in known:
+                continue
+            instances.append(
+                {
+                    "parent_module": parent,
+                    "module": child,
+                    "instance_name": instance_name,
+                    "source_artifact": sources[parent],
+                }
+            )
+
+    children = {}
+    for instance in instances:
+        children.setdefault(instance["parent_module"], []).append(instance)
+    instantiated = {instance["module"] for instance in instances}
+    roots = [top] if top in blocks else sorted(set(blocks) - instantiated)
+    realized = []
+
+    def expand(parent: str, parent_path: str, ancestors: tuple[str, ...]):
+        for instance in children.get(parent, []):
+            path = f"{parent_path}/{instance['instance_name']}"
+            realized.append({**instance, "instance_path": path})
+            child = instance["module"]
+            if child not in ancestors:
+                expand(child, path, (*ancestors, child))
+
+    for root in roots:
+        expand(root, root, (root,))
+
+    definitions = []
+    for name in sorted(blocks):
+        definitions.append(
+            {
+                "name": name,
+                "source_artifact": sources[name],
+                "direct_dependencies": sorted(
+                    {item["module"] for item in children.get(name, [])}
+                ),
+            }
+        )
+    return {
+        "schema_version": 1,
+        "top": top if top in blocks else None,
+        "roots": roots,
+        "module_definitions": definitions,
+        "module_instances": instances,
+        "realized_instances": realized,
+    }
+
+
+def rtl_dependency_closure(root: str, hierarchy: dict) -> list[str]:
+    """Return the deterministic module-definition closure rooted at ``root``."""
+    dependencies = {
+        item["name"]: item.get("direct_dependencies", [])
+        for item in hierarchy.get("module_definitions", [])
+    }
+    result = []
+    pending = [root]
+    while pending:
+        module = pending.pop()
+        if module in result or module not in dependencies:
+            continue
+        result.append(module)
+        pending.extend(reversed(dependencies[module]))
+    return result
 
 
 def parse_verilog_modules(rtl_dir: Path) -> tuple[dict[str, str], list[dict]]:
@@ -350,8 +474,16 @@ def build_manifest(
     function_names: set[str] | None = None,
 ) -> dict:
     functions = parse_cpp_functions(kernel_cpp.read_text(encoding="utf-8"))
-    log_info = parse_vitis_log(log_path.read_text(encoding="utf-8", errors="replace"))
+    log_text = log_path.read_text(encoding="utf-8", errors="replace")
+    log_info = parse_vitis_log(log_text)
+    synthesis_contract = parse_vitis_synthesis_contract(log_text)
     definitions, instances = parse_verilog_modules(rtl_dir)
+    hierarchy = extract_rtl_hierarchy(
+        {
+            str(path): path.read_text(encoding="utf-8", errors="replace")
+            for path in sorted(rtl_dir.glob("*.v"))
+        }
+    )
     selector = re.compile(function_pattern)
     selected = []
     normalized_names = (
@@ -419,6 +551,7 @@ def build_manifest(
                     "hls_equivalence_hash": hls_hash,
                     "hls_interface_signature": hls_signature,
                     "mapping_mode": mode,
+                    "synthesis_contract": synthesis_contract,
                     "status": "empty_source" if empty_source else "no_rtl_process",
                 }
             )
@@ -434,6 +567,21 @@ def build_manifest(
             matching_instances = [
                 item for item in instances if item["module"] in rtl_modules
             ]
+            hierarchy_instances = [
+                item
+                for item in hierarchy["module_instances"]
+                if item["module"] in rtl_modules
+            ]
+            parent_modules = sorted(
+                {item["parent_module"] for item in hierarchy_instances}
+            )
+            rtl_root_module = (
+                parent_modules[0]
+                if len(parent_modules) == 1
+                else rtl_modules[0]
+                if len(rtl_modules) == 1
+                else None
+            )
             rtl_hash = None
             if len(rtl_modules) == 1:
                 rtl_text = Path(definitions[rtl_modules[0]]).read_text(
@@ -455,6 +603,7 @@ def build_manifest(
                     "hls_equivalence_hash": hls_hash,
                     "hls_interface_signature": hls_signature,
                     "mapping_mode": mode,
+                    "synthesis_contract": synthesis_contract,
                     "vitis_parent": log_info["inline"].get(function.name),
                     "vitis_process": process,
                     "legalized_process": legalized,
@@ -463,6 +612,12 @@ def build_manifest(
                         for module in rtl_modules
                     ],
                     "rtl_instances": matching_instances,
+                    "rtl_root_module": rtl_root_module,
+                    "rtl_root_instances": [
+                        item
+                        for item in hierarchy["realized_instances"]
+                        if item["module"] == rtl_root_module
+                    ],
                     "rtl_equivalence_hash": rtl_hash,
                     "status": status,
                 }
@@ -477,6 +632,7 @@ def build_manifest(
             "rtl_dir": str(rtl_dir),
         },
         "records": records,
+        "rtl_hierarchy": hierarchy,
         "macro_groups": macro_groups,
         "candidate_groups": candidate_groups,
         "summary": {
@@ -505,30 +661,27 @@ def build_manifest(
 
 
 def build_equivalence_groups(records: list[dict]) -> tuple[list[dict], list[dict]]:
-    """Build proven RTL groups and broader pre-HLS candidate groups.
+    """Group interchangeable blocks by their specialized MLIR/HLS contract.
 
-    Equality of canonical RTL token streams is a conservative alpha-equivalence
-    proof: the implementations differ only by generated identifiers.  HLS hash
-    equality is used only for candidate discovery because downstream scheduling
-    may still differ.
+    Generated RTL fingerprints are retained as audit evidence. They no longer
+    define macro identity: every member is intentionally replaced by the one
+    selected representative implementation.
     """
-    by_rtl: dict[str, list[dict]] = {}
-    by_hls: dict[str, list[dict]] = {}
+    by_contract: dict[str, list[dict]] = {}
     for record in records:
         if record.get("status") != "matched":
             continue
-        if record.get("rtl_equivalence_hash"):
-            by_rtl.setdefault(record["rtl_equivalence_hash"], []).append(record)
-        if record.get("hls_equivalence_hash"):
-            by_hls.setdefault(record["hls_equivalence_hash"], []).append(record)
+        attach_implementation_contract(record)
+        by_contract.setdefault(
+            record["implementation_equivalence_hash"], []
+        ).append(record)
 
     macro_groups = []
-    record_to_macro = {}
-    for rtl_hash, members in sorted(by_rtl.items()):
-        group_id = f"macro_alpha_{rtl_hash[:16]}"
+    audits = []
+    for contract_hash, members in sorted(by_contract.items()):
+        group_id = f"macro_hls_{contract_hash[:16]}"
         member_entries = []
         for member in members:
-            record_to_macro[member["semantic_id"]] = group_id
             member_entries.append(
                 {
                     "semantic_id": member["semantic_id"],
@@ -547,9 +700,20 @@ def build_equivalence_groups(records: list[dict]) -> tuple[list[dict], list[dict
                 "member_count": len(members),
                 "proof": {
                     "status": "proven",
-                    "method": "canonical_rtl_alpha_equivalence",
-                    "rtl_hash": rtl_hash,
-                    "scope": "cycle-accurate generated RTL structure",
+                    "method": "specialized_mlir_emitted_hls_contract",
+                    "implementation_contract_hash": contract_hash,
+                    "scope": "representative implementation substitution",
+                    "contract": members[0]["implementation_contract"],
+                },
+                "rtl_audit": {
+                    "authority": False,
+                    "distinct_hashes": sorted(
+                        {
+                            member.get("rtl_equivalence_hash")
+                            for member in members
+                            if member.get("rtl_equivalence_hash")
+                        }
+                    ),
                 },
                 "orientation_policy": {
                     "direction_in_fingerprint": False,
@@ -558,25 +722,21 @@ def build_equivalence_groups(records: list[dict]) -> tuple[list[dict], list[dict
                 },
             }
         )
-
-    candidate_groups = []
-    for hls_hash, members in sorted(by_hls.items()):
-        macro_ids = sorted(
-            {record_to_macro.get(member["semantic_id"]) for member in members}
-            - {None}
+        rtl_hashes = macro_groups[-1]["rtl_audit"]["distinct_hashes"]
+        macro_groups[-1]["rtl_audit"]["status"] = (
+            "agree" if len(rtl_hashes) <= 1 else "generated_rtl_diverged"
         )
-        if len(members) < 2 or len(macro_ids) <= 1:
-            continue
-        candidate_groups.append(
+        if len(rtl_hashes) > 1:
+            audits.append(
             {
-                "candidate_class_id": f"hls_candidate_{hls_hash[:16]}",
+                "audit_id": f"rtl_divergence_{contract_hash[:16]}",
                 "members": [member["semantic_id"] for member in members],
-                "hls_hash": hls_hash,
-                "rtl_macro_classes": macro_ids,
-                "status": "requires_sequential_equivalence",
+                "implementation_contract_hash": contract_hash,
+                "rtl_hashes": rtl_hashes,
+                "status": "diagnostic_only_representative_will_be_used",
             }
         )
-    return macro_groups, candidate_groups
+    return macro_groups, audits
 
 
 def _normalized_hls_function(name: str) -> str:
@@ -602,6 +762,12 @@ def merge_pre_hls_manifest(pre_manifest: dict, post_manifest: dict) -> dict:
         record["semantic_id"] = pe["semantic_id"]
         record["kernel"] = pe["kernel"]
         record["pid"] = pe["pid"]
+        record["pre_hls_implementation_contract"] = pe.get(
+            "pre_hls_implementation_contract"
+        )
+        record["pre_hls_implementation_contract_hash"] = pe.get(
+            "pre_hls_implementation_contract_hash"
+        )
         pe.setdefault("post_hls_records", []).append(record)
         joined_records.append(record)
 
@@ -614,6 +780,7 @@ def merge_pre_hls_manifest(pre_manifest: dict, post_manifest: dict) -> dict:
             "post_hls_records": joined_records,
             "macro_groups": macro_groups,
             "post_hls_candidate_groups": candidate_groups,
+            "rtl_hierarchy": post_manifest.get("rtl_hierarchy", {}),
             "summary": {
                 **post_manifest["summary"],
                 "pre_hls_pe_instances": len(merged.get("pe_instances", [])),

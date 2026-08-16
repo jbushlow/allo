@@ -16,6 +16,7 @@
 #include "mlir/IR/IntegerSet.h"
 #include "mlir/InitAllDialects.h"
 #include "mlir/Tools/mlir-translate/Translation.h"
+#include "llvm/ADT/StringMap.h"
 #include "llvm/Support/raw_ostream.h"
 
 #include "allo/Dialect/AlloDialect.h"
@@ -39,7 +40,7 @@ static SmallString<16> getCatapultTypeName(Type valType) {
   // nangate-45nm_beh does not support native IEEE-754 float arithmetic.
   // Use ac_ieee_float<binary32> (from ac_std_float.h) for synthesizable f32.
   if (llvm::isa<Float16Type>(valType))
-    return SmallString<16>("half");
+    return SmallString<16>("ac_ieee_float<binary16>");
   else if (llvm::isa<Float32Type>(valType))
     return SmallString<16>("ac_ieee_float<binary32>");
   else if (llvm::isa<Float64Type>(valType))
@@ -119,6 +120,13 @@ public:
   void emitArrayDecl(Value array, bool isFunc = false,
                      std::string name = "") override;
   void emitLoopDirectives(Operation *op) override;
+  void emitLoopDirectivesPreheader(Operation *op) override;
+  void emitNarrowCastSuffix(Value src, Value dst) override;
+  void emitGetBit(allo::GetIntBitOp op) override;
+  void emitSetBit(allo::SetIntBitOp op) override;
+  void emitGetSlice(allo::GetIntSliceOp op) override;
+  void emitSetSlice(allo::SetIntSliceOp op) override;
+  void emitBitcast(arith::BitcastOp op) override;
   void emitStreamConstruct(allo::StreamConstructOp op) override;
   void emitStreamTryGet(allo::StreamTryGetOp op) override;
   void emitStreamTryPut(allo::StreamTryPutOp op) override;
@@ -126,6 +134,7 @@ public:
   void emitStreamFull(allo::StreamFullOp op) override;
   void emitArrayDirectives(Value memref) override;
   void emitFunction(func::FuncOp func) override;
+  void emitFunctionDeclaration(func::FuncOp func) override;
 
 protected:
   void emitValue(Value val, unsigned rank = 0, bool isPtr = false,
@@ -156,6 +165,8 @@ protected:
     else
       os << "-INFINITY";
   }
+
+  SmallVector<Value, 8> emitCatapultFunctionSignature(func::FuncOp func);
 };
 } // namespace
 
@@ -167,6 +178,29 @@ void CatapultModuleEmitter::emitValue(Value val, unsigned rank, bool isPtr,
                                       std::string name) {
 
   assert(!(rank && isPtr) && "should be either an array or a pointer.");
+
+  // ac_ieee_float<binary16> deliberately has only explicit constructors from
+  // native floating-point types.  Wrap scalar f16 constants rather than
+  // relying on the backend-independent literal returned by getName().
+  if (auto constant = val.getDefiningOp<arith::ConstantOp>()) {
+    if (llvm::isa<Float16Type>(val.getType())) {
+      auto attr = llvm::dyn_cast<FloatAttr>(constant.getValue());
+      if (attr) {
+        double value = attr.getValueAsDouble();
+        os << "ac_ieee_float<binary16>(";
+        if (std::isfinite(value))
+          os << std::to_string(static_cast<float>(value)) << "f";
+        else if (std::isnan(value))
+          os << "NAN";
+        else if (value > 0)
+          os << "INFINITY";
+        else
+          os << "-INFINITY";
+        os << ")";
+        return;
+      }
+    }
+  }
 
   // Value has been declared before or is a constant number.
   if (isDeclared(val)) {
@@ -261,43 +295,188 @@ void CatapultModuleEmitter::emitArrayDecl(Value array, bool isFunc,
     emitValue(array, /*rank=*/0, /*isPtr=*/true, name);
 }
 
-void CatapultModuleEmitter::emitLoopDirectives(Operation *op) {
+void CatapultModuleEmitter::emitLoopDirectives(Operation *op) {}
+
+void CatapultModuleEmitter::emitLoopDirectivesPreheader(Operation *op) {
   if (auto ii = getLoopDirective(op, "pipeline_ii")) {
-    reduceIndent();
     indent();
     os << "#pragma hls_pipeline_init_interval "
-       << llvm::cast<IntegerAttr>(ii).getValue();
-    os << "\n";
-    addIndent();
+       << llvm::cast<IntegerAttr>(ii).getValue() << "\n";
   }
 
   if (auto factor = getLoopDirective(op, "unroll")) {
-    reduceIndent();
     indent();
     auto val = llvm::cast<IntegerAttr>(factor).getValue();
     if (val == 0)
-      os << "#pragma hls_unroll"
-         << "\n";
+      os << "#pragma hls_unroll\n";
     else
       os << "#pragma hls_unroll " << val << "\n";
-    addIndent();
   }
 
   if (auto parallel = getLoopDirective(op, "parallel")) {
-    reduceIndent();
     indent();
-    // parallel implies full unroll
-    os << "#pragma hls_unroll"
-       << "\n";
-    addIndent();
+    os << "#pragma hls_unroll\n";
   }
 
   if (auto dataflow = getLoopDirective(op, "dataflow")) {
-    reduceIndent();
     indent();
     os << "#pragma hls_design dataflow\n";
-    addIndent();
   }
+}
+
+void CatapultModuleEmitter::emitNarrowCastSuffix(Value src, Value dst) {
+  auto srcType = llvm::dyn_cast<IntegerType>(src.getType());
+  if (!srcType || srcType.getWidth() <= 64)
+    return;
+
+  auto dstType = llvm::dyn_cast<IntegerType>(dst.getType());
+  if (!llvm::isa<IndexType>(dst.getType()) &&
+      (!dstType || dstType.getWidth() > 64))
+    return;
+
+  bool isUnsigned =
+      srcType.getSignedness() == IntegerType::SignednessSemantics::Unsigned;
+  os << (isUnsigned ? ".to_uint64()" : ".to_int64()");
+}
+
+static bool usesUnsignedBitRepresentation(Operation *op) {
+  return op->hasAttr("unsigned");
+}
+
+void CatapultModuleEmitter::emitGetBit(allo::GetIntBitOp op) {
+  Value result = op.getResult();
+  unsigned width = op.getNum().getType().getIntOrFloatBitWidth();
+  fixUnsignedType(result, usesUnsignedBitRepresentation(op));
+
+  indent();
+  emitValue(result);
+  os << ";\n";
+  indent();
+  os << "ac_int<" << width << ", "
+     << (usesUnsignedBitRepresentation(op) ? "false" : "true") << "> "
+     << getName(result) << "_tmp = ";
+  emitValue(op.getNum());
+  os << ";\n";
+  indent();
+  emitValue(result);
+  os << " = " << getName(result) << "_tmp[";
+  emitValue(op.getIndex());
+  os << "];";
+  emitInfoAndNewLine(op);
+}
+
+void CatapultModuleEmitter::emitSetBit(allo::SetIntBitOp op) {
+  Value result = op.getResult();
+  unsigned width = op.getNum().getType().getIntOrFloatBitWidth();
+
+  indent();
+  emitValue(result);
+  os << ";\n";
+  indent();
+  os << "ac_int<" << width << ", "
+     << (usesUnsignedBitRepresentation(op) ? "false" : "true") << "> "
+     << getName(result) << "_tmp = ";
+  emitValue(op.getNum());
+  os << ";\n";
+  indent();
+  os << getName(result) << "_tmp[";
+  emitValue(op.getIndex());
+  os << "] = ";
+  emitValue(op.getVal());
+  os << ";\n";
+  indent();
+  emitValue(result);
+  os << " = " << getName(result) << "_tmp;";
+  emitInfoAndNewLine(op);
+}
+
+void CatapultModuleEmitter::emitGetSlice(allo::GetIntSliceOp op) {
+  Value result = op.getResult();
+  unsigned sourceWidth = op.getNum().getType().getIntOrFloatBitWidth();
+  unsigned sliceWidth = result.getType().getIntOrFloatBitWidth();
+  fixUnsignedType(result, usesUnsignedBitRepresentation(op));
+
+  indent();
+  emitValue(result);
+  os << ";\n";
+  indent();
+  os << "ac_int<" << sourceWidth << ", "
+     << (usesUnsignedBitRepresentation(op) ? "false" : "true") << "> "
+     << getName(result) << "_tmp = ";
+  emitValue(op.getNum());
+  os << ";\n";
+  indent();
+  emitValue(result);
+  os << " = " << getName(result) << "_tmp.slc<" << sliceWidth << ">(";
+  emitValue(op.getLo());
+  os << ");";
+  emitInfoAndNewLine(op);
+}
+
+void CatapultModuleEmitter::emitSetSlice(allo::SetIntSliceOp op) {
+  Value result = op.getResult();
+  unsigned sourceWidth = op.getNum().getType().getIntOrFloatBitWidth();
+  unsigned valueWidth = op.getVal().getType().getIntOrFloatBitWidth();
+
+  indent();
+  emitValue(result);
+  os << ";\n";
+  indent();
+  os << "ac_int<" << sourceWidth << ", "
+     << (usesUnsignedBitRepresentation(op) ? "false" : "true") << "> "
+     << getName(result) << "_tmp = ";
+  emitValue(op.getNum());
+  os << ";\n";
+  indent();
+  os << getName(result) << "_tmp.set_slc(";
+  emitValue(op.getLo());
+  os << ", ac_int<" << valueWidth << ", "
+     << (usesUnsignedBitRepresentation(op) ? "false" : "true") << ">(";
+  emitValue(op.getVal());
+  os << "));\n";
+  indent();
+  emitValue(result);
+  os << " = " << getName(result) << "_tmp;";
+  emitInfoAndNewLine(op);
+}
+
+void CatapultModuleEmitter::emitBitcast(arith::BitcastOp op) {
+  Value result = op.getResult();
+  Value operand = op.getOperand();
+  auto sourceFloat = llvm::dyn_cast<FloatType>(operand.getType());
+  auto resultFloat = llvm::dyn_cast<FloatType>(result.getType());
+  auto sourceInteger = llvm::dyn_cast<IntegerType>(operand.getType());
+  auto resultInteger = llvm::dyn_cast<IntegerType>(result.getType());
+
+  // Catapult IEEE floats are class types, so C union type punning is neither
+  // valid nor necessary.  Use the raw-bit accessors supplied by ac_std_float.
+  if (sourceFloat && resultInteger &&
+      (sourceFloat.getWidth() == 16 || sourceFloat.getWidth() == 32)) {
+    fixUnsignedType(result, op->hasAttr("unsigned"));
+    indent();
+    emitValue(result);
+    os << " = ";
+    emitValue(operand);
+    os << ".data_ac_int();";
+    emitInfoAndNewLine(op);
+    return;
+  }
+
+  if (sourceInteger && resultFloat &&
+      (resultFloat.getWidth() == 16 || resultFloat.getWidth() == 32)) {
+    indent();
+    emitValue(result);
+    os << ";\n";
+    indent();
+    os << getName(result) << ".set_data(ac_int<" << resultFloat.getWidth()
+       << ", true>(";
+    emitValue(operand);
+    os << "));";
+    emitInfoAndNewLine(op);
+    return;
+  }
+
+  VhlsModuleEmitter::emitBitcast(op);
 }
 
 void CatapultModuleEmitter::emitStreamConstruct(allo::StreamConstructOp op) {
@@ -444,27 +623,8 @@ void CatapultModuleEmitter::emitArrayDirectives(Value memref) {
   // pragmas)
 }
 
-void CatapultModuleEmitter::emitFunction(func::FuncOp func) {
-  if (func->hasAttr("bit"))
-    BIT_FLAG = true;
-
-  if (func.getBlocks().empty())
-    // This is a declaration.
-    return;
-
-  if (func.getBlocks().size() > 1)
-    emitError(func, "has more than one basic blocks.");
-
-  // Emit hls_design pragma BEFORE the function declaration so EDG binds it.
-  // Top functions get #pragma hls_design top.
-  // Sub-functions are left without a block pragma; hierarchy is controlled
-  // via TCL (solution design set -block) when needed.
-  if (func->hasAttr("top")) {
-    os << "/// This is top function.\n";
-    os << "#pragma hls_design top\n";
-  }
-
-  // Emit function signature.
+SmallVector<Value, 8>
+CatapultModuleEmitter::emitCatapultFunctionSignature(func::FuncOp func) {
   os << "void " << func.getName() << "(\n";
   addIndent();
 
@@ -569,6 +729,37 @@ void CatapultModuleEmitter::emitFunction(func::FuncOp func) {
     emitError(func, "doesn't have a return operation as terminator.");
 
   reduceIndent();
+  return portList;
+}
+
+void CatapultModuleEmitter::emitFunctionDeclaration(func::FuncOp func) {
+  if (func.getBlocks().empty())
+    return;
+  auto savedNames = state.nameTable;
+  auto savedConflicts = state.nameConflictCnt;
+  emitCatapultFunctionSignature(func);
+  state.nameTable = savedNames;
+  state.nameConflictCnt = savedConflicts;
+  os << "\n);\n\n";
+}
+
+void CatapultModuleEmitter::emitFunction(func::FuncOp func) {
+  if (func->hasAttr("bit"))
+    BIT_FLAG = true;
+
+  if (func.getBlocks().empty())
+    return;
+
+  if (func.getBlocks().size() > 1)
+    emitError(func, "has more than one basic blocks.");
+
+  // Catapult binds hls_design to the declaration that follows the pragma.
+  if (func->hasAttr("top")) {
+    os << "/// This is top function.\n";
+    os << "#pragma hls_design top\n";
+  }
+
+  auto portList = emitCatapultFunctionSignature(func);
   os << "\n) {";
   emitInfoAndNewLine(func);
 
@@ -642,6 +833,29 @@ using namespace std;
     }
   } else {
     os << device_header;
+
+    llvm::StringMap<unsigned> functionPosition;
+    llvm::StringMap<unsigned> earliestCallerPosition;
+    unsigned position = 0;
+    for (auto function : module.getOps<func::FuncOp>()) {
+      unsigned currentPosition = position++;
+      functionPosition[function.getName()] = currentPosition;
+      function.walk([&](func::CallOp call) {
+        auto iterator = earliestCallerPosition.find(call.getCallee());
+        if (iterator == earliestCallerPosition.end())
+          earliestCallerPosition[call.getCallee()] = currentPosition;
+        else
+          iterator->second = std::min(iterator->second, currentPosition);
+      });
+    }
+
+    for (auto function : module.getOps<func::FuncOp>()) {
+      auto caller = earliestCallerPosition.find(function.getName());
+      if (caller != earliestCallerPosition.end() &&
+          functionPosition[function.getName()] > caller->second)
+        emitFunctionDeclaration(function);
+    }
+
     for (auto &op : *module.getBody()) {
       if (auto func = dyn_cast<func::FuncOp>(op))
         emitFunction(func);

@@ -751,10 +751,18 @@ class TypeInferer(ASTVisitor):
                                 mapping is not None
                             ), f"Invalid @df.kernel decorator on function '{node.name}': missing required 'mapping' parameter."
                             old_ctx.mapping = mapping
+                            generalized_count = len(
+                                getattr(node, "pid_generalized_axes", [])
+                            )
+                            source_args = node.args.args[
+                                : len(node.args.args) - generalized_count
+                                if generalized_count
+                                else len(node.args.args)
+                            ]
                             assert len(kernel_args) == len(
-                                node.args.args
-                            ), f"Invalid @df.kernel decorator on function '{node.name}': 'args' length mismatch (expected {len(node.args.args)}, got {len(kernel_args)})."
-                            for top_arg_name, arg in zip(kernel_args, node.args.args):
+                                source_args
+                            ), f"Invalid @df.kernel decorator on function '{node.name}': 'args' length mismatch (expected {len(source_args)}, got {len(kernel_args)})."
+                            for top_arg_name, arg in zip(kernel_args, source_args):
                                 top_arg = ctx.get_symbol(name=top_arg_name.id)
                                 if top_arg.shape == ():
                                     raise ValueError(

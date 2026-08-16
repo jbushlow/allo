@@ -71,6 +71,8 @@ public:
   virtual void emitSelect(arith::SelectOp op) {}
   virtual void emitConstant(arith::ConstantOp op) {}
   virtual void emitGeneralCast(UnrealizedConversionCastOp op) {}
+  /// Backend hook for conversions that require an explicit source accessor.
+  virtual void emitNarrowCastSuffix(Value src, Value dst) {}
   virtual void emitGetBit(allo::GetIntBitOp op) {}
   virtual void emitSetBit(allo::SetIntBitOp op) {}
   virtual void emitGetSlice(allo::GetIntSliceOp op) {}
@@ -108,6 +110,7 @@ protected:
   /// MLIR component and HLS C++ pragma emitters.
   virtual void emitBlock(Block &block) {}
   virtual void emitLoopDirectives(Operation *op) {}
+  virtual void emitLoopDirectivesPreheader(Operation *op) {}
   virtual void emitArrayDirectives(Value memref) {}
   virtual void emitFunctionDirectives(func::FuncOp func, ArrayRef<Value> portList) {}
 

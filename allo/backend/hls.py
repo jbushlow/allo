@@ -38,6 +38,8 @@ from .tapa import (
 from .catapult import (
     codegen_tcl as codegen_tcl_catapult,
     codegen_host as codegen_host_catapult,
+    discover_sub_functions as discover_catapult_sub_functions,
+    discover_stream_depths as discover_catapult_stream_depths,
     parse_catapult_report,
     parse_catapult_hierarchical_report,
 )
@@ -76,8 +78,11 @@ def _find_catapult_binary():
     if os.path.isdir(siemens_root):
         # Pick the most recent version (sort descending)
         versions = sorted(
-            (d for d in os.listdir(siemens_root)
-             if os.path.isdir(os.path.join(siemens_root, d))),
+            (
+                d
+                for d in os.listdir(siemens_root)
+                if os.path.isdir(os.path.join(siemens_root, d))
+            ),
             reverse=True,
         )
         for ver in versions:
@@ -317,6 +322,14 @@ class HLSModule:
 
         buf.seek(0)
         self.hls_code = buf.read()
+        if platform == "catapult" and "sub_funcs" not in configs:
+            configs["sub_funcs"] = discover_catapult_sub_functions(
+                self.hls_code, top_func_name
+            )
+        if platform == "catapult" and "stream_depths" not in configs:
+            configs["stream_depths"] = discover_catapult_stream_depths(
+                self.module, top_func_name, self.hls_code
+            )
         if project is not None:
             assert mode is not None, "mode must be specified when project is specified"
             os.makedirs(project, exist_ok=True)
@@ -560,19 +573,27 @@ class HLSModule:
         return f"HLSModule({self.top_func_name}, {self.mode}, {self.project})"
 
     def _enrich_asic_manifest(self):
-        """Join compiler identities to Vitis and RTL artifacts after csynth."""
+        """Join compiler identities to backend-specific post-HLS artifacts."""
         config = self.asic_manifest_config
         if not config or not config.get("enabled", True):
             return
         pre_manifest = config["path"]
         if not os.path.isfile(pre_manifest):
             raise FileNotFoundError(f"ASIC manifest not found: {pre_manifest}")
-        extractor = os.path.abspath(
-            os.path.join(
-                os.path.dirname(__file__),
-                "../../scripts/extract_vitis_pe_manifest.py",
-            )
+        script_dir = os.path.abspath(
+            os.path.join(os.path.dirname(__file__), "../../scripts")
         )
+        if self.platform == "vitis_hls":
+            extractor = os.path.join(script_dir, "extract_vitis_pe_manifest.py")
+            backend_args = [
+                "--solution-dir",
+                os.path.join(self.project, "out.prj", "solution1"),
+            ]
+        elif self.platform == "catapult":
+            extractor = os.path.join(script_dir, "extract_catapult_pe_manifest.py")
+            backend_args = ["--project-dir", self.project, "--top", self.top_func_name]
+        else:
+            return
         cmd = [
             sys.executable,
             extractor,
@@ -580,8 +601,7 @@ class HLSModule:
             os.path.join(self.project, "kernel.cpp"),
             "--pre-manifest",
             pre_manifest,
-            "--solution-dir",
-            os.path.join(self.project, "out.prj", "solution1"),
+            *backend_args,
             "--output",
             config["final_path"],
         ]
@@ -949,7 +969,9 @@ class HLSModule:
                 catapult_cmd = _find_catapult_binary()
 
                 cmd = f"cd {self.project}; {catapult_cmd} -shell -f run.tcl"
-                assert len(args) == 0, f"{self.mode} mode does not need to pass in arguments"
+                assert (
+                    len(args) == 0
+                ), f"{self.mode} mode does not need to pass in arguments"
                 print(
                     f"[{time.strftime('%H:%M:%S', time.gmtime())}] Begin synthesizing project with Catapult HLS ({self.mode} mode)..."
                 )
@@ -965,6 +987,8 @@ class HLSModule:
                 print(
                     f"[{time.strftime('%H:%M:%S', time.gmtime())}] Catapult HLS synthesis completed successfully"
                 )
+                if self.mode == "csyn":
+                    self._enrich_asic_manifest()
 
                 if self.mode == "ppa":
                     print(

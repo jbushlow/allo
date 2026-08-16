@@ -2,11 +2,12 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import os
+import re
 import tempfile
 import pytest
 import numpy as np
 import allo
-from allo.ir.types import int32, int8, int16, float32
+from allo.ir.types import int32, int8, int16, float16, float32, UInt
 
 
 def check_catapult():
@@ -204,6 +205,61 @@ def test_catapult_nested_function():
         print("test_catapult_nested_function passed!")
 
 
+def test_catapult_integer_slices_use_ac_int():
+    """Packed integer reads and writes must not leak Xilinx ap_int types."""
+
+    def packed_slices(
+        source: UInt(32), value: UInt(8), offset: int32
+    ) -> UInt(32):
+        result: UInt(32) = source
+        lane: UInt(8) = source[offset : offset + 8]
+        result[offset : offset + 8] = value + lane
+        return result
+
+    module = allo.customize(packed_slices).build(target="catapult")
+    code = module.hls_code
+
+    assert "ap_int<" not in code
+    assert ".slc<8>(" in code
+    assert ".set_slc(" in code
+    assert "ac_int<8," in code
+
+
+def test_catapult_float16_uses_ac_ieee_float():
+    """Catapult FP16 constants and bitcasts use the native AC datatype API."""
+
+    def add_float16(a: float16[8], b: float16[8]) -> float16[8]:
+        c: float16[8]
+        zero: float16 = 0.0
+        for i in range(8):
+            c[i] = a[i] + b[i] + zero
+        return c
+
+    def float16_to_bits(a: float16[8]) -> UInt(16)[8]:
+        bits: UInt(16)[8]
+        for i in range(8):
+            bits[i] = a[i].bitcast()
+        return bits
+
+    def bits_to_float16(bits: UInt(16)[8]) -> float16[8]:
+        a: float16[8]
+        for i in range(8):
+            a[i] = bits[i].bitcast()
+        return a
+
+    code = "\n".join(
+        allo.customize(kernel).build(target="catapult").hls_code
+        for kernel in (add_float16, float16_to_bits, bits_to_float16)
+    )
+
+    assert "ac_ieee_float<binary16>" in code
+    assert "ac_ieee_float<binary16>(0.000000f)" in code
+    assert ".data_ac_int()" in code
+    assert ".set_data(ac_int<16, true>(" in code
+    assert not re.search(r"\bhalf\b", code)
+    assert not re.search(r"union\s*\{[^}]*ac_ieee_float", code)
+
+
 def test_catapult_tcl_generation():
     """Test TCL script generation for Catapult HLS"""
 
@@ -232,6 +288,61 @@ def test_catapult_tcl_generation():
         assert "go assembly" in tcl_content
         assert "go extract" in tcl_content
         print("test_catapult_tcl_generation passed!")
+
+
+def test_catapult_tcl_clock_period_takes_precedence():
+    """An explicit ASIC clock period is preserved without MHz round-tripping."""
+
+    def simple_add(a: int32[10], b: int32[10]) -> int32[10]:
+        c: int32[10]
+        for i in range(10):
+            c[i] = a[i] + b[i]
+        return c
+
+    s = allo.customize(simple_add)
+    with tempfile.TemporaryDirectory() as tmpdir:
+        s.build(
+            target="catapult",
+            mode="csyn",
+            project=tmpdir,
+            configs={"clock_period": 3.333, "frequency": 100},
+        )
+        with open(os.path.join(tmpdir, "run.tcl"), encoding="utf-8") as infile:
+            tcl_content = infile.read()
+
+    assert "-CLOCK_PERIOD 3.333" in tcl_content
+
+
+def test_catapult_tcl_emits_stream_depth_constraints():
+    from allo.backend.catapult import codegen_tcl
+
+    tcl = codegen_tcl(
+        "top", {"stream_depths": [("v10", 2), ("v11", 8)]}
+    )
+    assert "directive set /top/v10:cns -FIFO_DEPTH 2" in tcl
+    assert "directive set /top/v11:cns -FIFO_DEPTH 8" in tcl
+
+
+def test_catapult_stream_depth_join_is_positional(monkeypatch):
+    import allo.backend.catapult as catapult
+
+    mlir_top = """
+      func.func @top() {
+        %0 = allo.stream_construct() : !allo.stream<i17, 2>
+        %1 = allo.stream_construct() : !allo.stream<i26, 8>
+      }
+    """
+    source = """
+      void top() {
+        static ac_channel< ac_int<17, false> > v10;
+        static ac_channel< ac_int<26, false> > v11;
+      }
+    """
+    monkeypatch.setattr(catapult, "find_func_in_module", lambda _module, _top: mlir_top)
+    assert catapult.discover_stream_depths(object(), "top", source) == [
+        ("v10", 2),
+        ("v11", 8),
+    ]
 
 
 # =============================================================================
