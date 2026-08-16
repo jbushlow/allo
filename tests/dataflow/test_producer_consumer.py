@@ -42,6 +42,12 @@ def test_producer_consumer():
     np.testing.assert_allclose(B, A + 1)
     print("Dataflow Simulator Passed!")
 
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_producer_consumer")
+    B[...] = 0   # clear the simulator's result first
+    mod_sc(A, B)
+    np.testing.assert_allclose(B, A + 1)
+    print("SystemC Cosim Passed!")
+
 
 def test_double_put():
     Ty = float32
@@ -75,6 +81,12 @@ def test_double_put():
     sim_mod(A, B)
     np.testing.assert_allclose(B, A + 1)
     print("Dataflow Simulator Passed!")
+
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_producer_consumer_2")
+    B[...] = 0   # clear the simulator's result first
+    mod_sc(A, B)
+    np.testing.assert_allclose(B, A + 1)
+    print("SystemC Cosim Passed!")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         mod = df.build(top, target="vitis_hls", project=tmpdir)

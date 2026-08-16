@@ -54,6 +54,12 @@ def test_subregion_with_stream_inside_for():
     mod(out)
     assert out[0] == 7
 
+    mod_sc = df.build(_top, target="systemc", mode="cosim", project="test_nested_subregion_streams")
+    out[...] = 0   # clear the simulator's result first
+    mod_sc(out)
+    assert out[0] == 7
+    print("SystemC Cosim Passed!")
+
 
 if __name__ == "__main__":
     test_subregion_with_stream_inside_for()

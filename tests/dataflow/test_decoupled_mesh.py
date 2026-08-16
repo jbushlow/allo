@@ -275,9 +275,16 @@ def test_decoupled_message_passing():
     # Run Simulation
     simulator(np_base_addr, np_in_payload, np_out_payload)
 
+
     # Verify that CT modified the payload (+1.0)
     np.testing.assert_allclose(np_out_payload, np_in_payload + 1.0)
     print("Simulation passed successfully!")
+
+    mod_sc = df.build(top_message_passing, target="systemc", mode="cosim", project="test_decoupled_mesh")
+    np_out_payload[...] = 0   # clear the simulator's result first
+    mod_sc(np_base_addr, np_in_payload, np_out_payload)
+    np.testing.assert_allclose(np_out_payload, np_in_payload + 1.0)
+    print("SystemC Cosim Passed!")
 
 
 def test_decoupled_2x1_mesh():
@@ -296,6 +303,7 @@ def test_decoupled_2x1_mesh():
 
     sim(np_in0, np_in1, np_out0, np_out1)
 
+
     # Each CT performs +1.0 on its data
     np.testing.assert_allclose(np_out0, np_in0 + 1.0, rtol=1e-5)
     np.testing.assert_allclose(np_out1, np_in1 + 1.0, rtol=1e-5)
@@ -303,8 +311,15 @@ def test_decoupled_2x1_mesh():
     print(f"  CT0 result (first 4): {np_out0[:4]}")
     print(f"  CT1 result (first 4): {np_out1[:4]}")
 
+    mod_sc = df.build(top_decoupled_2x1, target="systemc", mode="cosim", project="test_decoupled_mesh_2")
+    np_out0[...] = 0
+    np_out1[...] = 0
+    mod_sc(np_in0, np_in1, np_out0, np_out1)
+    np.testing.assert_allclose(np_out0, np_in0 + 1.0, rtol=1e-5)
+    np.testing.assert_allclose(np_out1, np_in1 + 1.0, rtol=1e-5)
+    print("SystemC Cosim Passed!")
+
 
 if __name__ == "__main__":
     test_decoupled_message_passing()
     test_decoupled_2x1_mesh()
-

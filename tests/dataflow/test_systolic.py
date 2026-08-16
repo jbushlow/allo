@@ -63,6 +63,12 @@ def test_systolic():
     np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
     print("Dataflow Simulator Passed!")
 
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_systolic")
+    C[...] = 0   # clear the simulator's result first
+    mod_sc(A, B, C)
+    np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    print("SystemC Cosim Passed!")
+
     if hls.is_available("vitis_hls"):
         s = df.customize(top)
         s.partition("top:A", dim=1, factor=2)

@@ -34,8 +34,13 @@ def test_stream_nb_sim():
         
         # Run simulation
         simulator()
+
         
         print("Simulation finished successfully!")
+
+        mod_sc = df.build(top_simple, target="systemc", mode="cosim", project="test_stream_ops_sim")
+        mod_sc()
+        print("SystemC Cosim Passed!")
     except Exception as e:
         print(f"Simulation failed: {e}")
         raise e

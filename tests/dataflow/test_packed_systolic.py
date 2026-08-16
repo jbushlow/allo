@@ -84,6 +84,7 @@ def test_packed_systolic():
     Z_packed = np.zeros((M // PP, N), dtype=np_type)
     sim_mod = df.build(top, target="simulator")
     sim_mod(packed_X, W_A_packed, Z_packed)
+
     np_C = X @ W_A_cst
     np_C_packed = np.ascontiguousarray(
         np.ascontiguousarray(np_C.transpose()).view(np_type).transpose()
@@ -91,8 +92,17 @@ def test_packed_systolic():
     np.testing.assert_allclose(Z_packed, np_C_packed, atol=1e-3)
     print("Dataflow Simulator Passed!")
 
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_packed_systolic")
+    Z_packed[...] = 0   # clear the simulator's result first
+    mod_sc(packed_X, W_A_packed, Z_packed)
+    np.testing.assert_allclose(Z_packed, np_C_packed, atol=1e-3)
+    print("SystemC Cosim Passed!")
+
     mod = df.build(top)
     if hls.is_available("vitis_hls"):
+        # The design ACCUMULATES (Z_elm[...] += c), so reusing a buffer another run
+        # already filled gives exactly 2x. Clear it first.
+        Z_packed[...] = 0
         mod(packed_X, W_A_packed, Z_packed)
 
         np_C = X @ W_A_cst

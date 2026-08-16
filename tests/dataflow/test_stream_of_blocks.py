@@ -47,6 +47,12 @@ def test_2d_blocks():
     np.testing.assert_allclose(B, A, atol=1e-5)
     print("Dataflow Simulator Passed for 2D blocks!")
 
+    mod_sc = df.build(top_stream_2d_blocks, target="systemc", mode="cosim", project="test_stream_of_blocks")
+    B[...] = 0   # clear the simulator's result first
+    mod_sc(A, B)
+    np.testing.assert_allclose(B, A, atol=1e-5)
+    print("SystemC Cosim Passed!")
+
     # Test with HLS backend
     if hls.is_available("vitis_hls"):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -111,6 +117,12 @@ def test_blocks_compute():
     np.testing.assert_allclose(B, expected, atol=1e-5)
     print("Dataflow Simulator Passed for blocks with computation!")
 
+    mod_sc = df.build(top_stream_block_compute, target="systemc", mode="cosim", project="test_stream_of_blocks_2")
+    B[...] = 0   # clear the simulator's result first
+    mod_sc(A, B)
+    np.testing.assert_allclose(B, expected, atol=1e-5)
+    print("SystemC Cosim Passed!")
+
     # Test with HLS backend
     if hls.is_available("vitis_hls"):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -169,6 +181,12 @@ def test_multiple_blocks():
     sim_mod(A, B, C)
     np.testing.assert_allclose(C, expected, atol=1e-5)
     print("Dataflow Simulator Passed for multiple streams of blocks!")
+
+    mod_sc = df.build(top_multiple_stream_blocks, target="systemc", mode="cosim", project="test_stream_of_blocks_3")
+    C[...] = 0   # clear the simulator's result first
+    mod_sc(A, B, C)
+    np.testing.assert_allclose(C, expected, atol=1e-5)
+    print("SystemC Cosim Passed!")
 
     # Test with HLS backend
     if hls.is_available("vitis_hls"):

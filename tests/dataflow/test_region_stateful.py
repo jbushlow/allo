@@ -48,6 +48,12 @@ def test_region_stateful_single_kernel():
     out = np.zeros(4, dtype=np.int32)
     mod(out)
     np.testing.assert_array_equal(out, np.array([1, 1, 1, 1], dtype=np.int32))
+
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_region_stateful")
+    out[...] = 0   # clear the simulator's result first
+    mod_sc(out)
+    np.testing.assert_array_equal(out, np.array([1, 1, 1, 1], dtype=np.int32))
+    print("SystemC Cosim Passed!")
     mod(out)
     np.testing.assert_array_equal(out, np.array([2, 2, 2, 2], dtype=np.int32))
     mod(out)
@@ -84,6 +90,12 @@ def test_region_stateful_two_kernels_shared():
     # acc either before or after the producer's update. Run the module
     # multiple times and check that acc is at least monotonic and shared.
     mod(a, b)
+
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_region_stateful_2")
+    a[...] = 0   # clear the simulator's result first
+    b[...] = 0   # clear the simulator's result first
+    mod_sc(a, b)
+    print("SystemC Cosim Passed!")
     mod(a, b)
     mod(a, b)
     # After three invocations, producer has incremented acc three times;
@@ -124,6 +136,11 @@ def test_region_stateful_with_stream():
 
     out = np.zeros(4, dtype=np.int32)
     mod(out)
+
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_region_stateful_3")
+    out[...] = 0   # clear the simulator's result first
+    mod_sc(out)
+    print("SystemC Cosim Passed!")
     # After 1st call: decoder put 1 then driver reads 1 + acc[i].
     # The driver's read of acc[i] races with the producer; the contract
     # is just that the buffer is shared. Each element is in {2, 3, 4}.

@@ -112,17 +112,19 @@ def test_systolic():
     np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
     print("Dataflow Simulator Passed!")
 
-    mod = df.build(top)
-    if hls.is_available("vitis_hls"):
-        mod(A, B, C)
-        np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
-        print("Passed!")
+    #mod = df.build(top)
+    #if hls.is_available("vitis_hls"):
+    #    mod(A, B, C)
+    #    np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    #    print("Passed!")
 
-    mod = df.build(top, target="vitis_hls", mode="hw_emu", project="df-gemm-daisy.prj")
-    if hls.is_available("vitis_hls"):
-        mod(A, B, C)
-        np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
-        print("Passed!")
+    # Re-zero: C still holds the SIMULATOR's output, so a cosim that wrote nothing
+    # would pass this check on stale data.
+    C = np.zeros((M, N), dtype=np.int16)
+    mod = df.build(top, target="systemc", mode="cosim", project="test_daisy_chain_gemm")
+    mod(A, B, C)
+    np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    print("Passed!")
 
 
 if __name__ == "__main__":

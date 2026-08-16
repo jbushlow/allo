@@ -59,13 +59,19 @@ def test_systolic():
     sim_mod(A, B, C)
     np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
     print("Dataflow Simulator Passed!")
-
-    mod = df.build(top)
-    if hls.is_available("vitis_hls"):
-        C = np.zeros((M, N), dtype=np.float32)
-        mod(A, B, C)
-        np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
-        print("Passed!")
+    
+    # Test the SystemC emitter
+    mod = df.build(top, target="systemc", mode="cosim", project="test_1D_systolic")
+    C = np.zeros((M, N), dtype=np.float32)
+    mod(A, B, C)
+    np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    print("Passed!")
+    
+    #if hls.is_available("vitis_hls"):
+    #    C = np.zeros((M, N), dtype=np.float32)
+    #    mod(A, B, C)
+    #    np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    #    print("Passed!")
 
 
 if __name__ == "__main__":

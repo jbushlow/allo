@@ -24,11 +24,16 @@ def test_uint():
             for mt, nt in allo.grid(M, N):
                 local_C[mt, nt] = stream.get()
 
-    mod = df.build(top, target="vitis_hls", project="top.prj")
-    print(mod.hls_code)
-    assert "hls::stream< uint16_t >" in mod.hls_code
-    assert "hls::stream< int16_t >" not in mod.hls_code
-    assert " int16_t" not in mod.hls_code
+    mod = df.build(top, target="systemc", mode="cosim", project="top_uint")
+    # The point of this test is that UInt stays UNSIGNED end to end; the old assertions
+    # checked Vitis' "hls::stream< uint16_t >", so on systemc they must check the ac_int
+    # form instead. Emitting a UInt payload as signed was a real bug.
+    assert "ac_int<16, false>" in mod.hls_code
+    A = np.random.randint(0, 2**16, (M, N)).astype(np.uint16)
+    C = np.zeros((M, N), dtype=np.uint16)
+    mod(A, C)
+    np.testing.assert_allclose(A, C)
+    print("Passed!")
 
 
 def test_func_index():
@@ -61,6 +66,12 @@ def test_func_index():
     sim_mod(A, B)
     np.testing.assert_allclose(A + 1, B)
     print("Dataflow Simulator Passed!")
+    
+    B = np.zeros((M, N), dtype=np.float32)   # re-zero: B was filled by the sim run above
+    mod = df.build(top, target="systemc", mode="cosim", project="test_func_index")
+    mod(A, B)
+    np.testing.assert_allclose(A + 1, B)
+    print("Passed!")
 
 
 def test_const_arrays():
@@ -80,6 +91,12 @@ def test_const_arrays():
     sim_mod(A)
     np.testing.assert_allclose(A, np_array)
     print("Dataflow Simulator Passed!")
+    
+    A = np.zeros((2, 4), dtype=np.int32)     # re-zero: A holds the sim's output
+    mod = df.build(top, target="systemc", mode="cosim", project="test_const_arrays")
+    mod(A)
+    np.testing.assert_allclose(A, np_array)
+    print("Passed!")
 
 
 def test_const_arrays_arithmetic():
@@ -105,6 +122,93 @@ def test_const_arrays_arithmetic():
     expected = np.array([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=np.int32)
     np.testing.assert_allclose(A, expected)
     print("Dataflow Simulator (Arithmetic) Passed!")
+    
+    A = np.zeros((2, 4), dtype=np.int32)     # re-zero: A holds the sim's output
+    mod = df.build(top, target="systemc", mode="cosim", project="test_const_arrays_arithmetic")
+    mod(A)
+    expected = np.array([[1, 2, 3, 4], [5, 6, 7, 8]], dtype=np.int32)
+    np.testing.assert_allclose(A, expected)
+    print("Passed!")
+
+
+
+def test_arg_mapping():
+    @df.region()
+    def top1(a: int32[4], b: int32[4]):
+        @df.kernel(mapping=[1], args=[a])
+        def k_a(x: int32[4]):  # local param name "x"
+            for i in range(4):
+                x[i] = 1
+
+        @df.kernel(mapping=[1], args=[b])
+        def k_b(x: int32[4]):  # SAME local param name "x"
+            for i in range(4):
+                x[i] = 2
+
+    mod = df.build(top1, target="simulator")
+    a = np.zeros(4).astype(np.int32)
+    b = np.zeros(4).astype(np.int32)
+    mod(a, b)
+    np.testing.assert_allclose(
+        a,
+        np.array([1, 1, 1, 1], dtype=np.int32),
+    )
+    np.testing.assert_allclose(
+        b,
+        np.array([2, 2, 2, 2], dtype=np.int32),
+    )
+    
+    mod = df.build(top1, target="systemc", mode="cosim", project="test_arg_mapping1")
+    a = np.zeros(4).astype(np.int32)
+    b = np.zeros(4).astype(np.int32)
+    mod(a, b)
+    np.testing.assert_allclose(
+        a,
+        np.array([1, 1, 1, 1], dtype=np.int32),
+    )
+    np.testing.assert_allclose(
+        b,
+        np.array([2, 2, 2, 2], dtype=np.int32),
+    )
+
+    @df.region()
+    def top2(a: int32[4], b: int32[4]):
+        @df.kernel(mapping=[1], args=[b])
+        def k_b(x: int32[4]):  # local param name "x"
+            for i in range(4):
+                x[i] = 1
+
+        @df.kernel(mapping=[1], args=[a])
+        def k_a(x: int32[4]):  # SAME local param name "x"
+            for i in range(4):
+                x[i] = 2
+
+    mod = df.build(top2, target="simulator")
+    a = np.zeros(4).astype(np.int32)
+    b = np.zeros(4).astype(np.int32)
+    mod(a, b)
+    np.testing.assert_allclose(
+        a,
+        np.array([2, 2, 2, 2], dtype=np.int32),
+    )
+    np.testing.assert_allclose(
+        b,
+        np.array([1, 1, 1, 1], dtype=np.int32),
+    )
+    
+    mod = df.build(top2, target="systemc", mode="cosim", project="test_arg_mapping2")
+    a = np.zeros(4).astype(np.int32)
+    b = np.zeros(4).astype(np.int32)
+    mod(a, b)
+    # top2 SWAPS which kernel writes which array, so the expectations invert.
+    np.testing.assert_allclose(
+        a,
+        np.array([2, 2, 2, 2], dtype=np.int32),
+    )
+    np.testing.assert_allclose(
+        b,
+        np.array([1, 1, 1, 1], dtype=np.int32),
+    )
 
 
 if __name__ == "__main__":
@@ -112,3 +216,4 @@ if __name__ == "__main__":
     test_func_index()
     test_const_arrays()
     test_const_arrays_arithmetic()
+    test_arg_mapping()

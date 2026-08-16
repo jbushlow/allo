@@ -41,6 +41,12 @@ def test_region_toparg_aliasing():
     # "got 2 but expected 1" before the fix.
     mod(a, b)
 
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_region_toparg_aliasing")
+    a[...] = 0   # clear the simulator's result first
+    b[...] = 0   # clear the simulator's result first
+    mod_sc(a, b)
+    print("SystemC Cosim Passed!")
+
     np.testing.assert_array_equal(a, np.ones(4, dtype=np.int32))
     np.testing.assert_array_equal(b, np.full(4, 2, dtype=np.int32))
 

@@ -114,6 +114,12 @@ def test_convolution():
 
     print("Simulation passed!")
 
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_systolic_conv")
+    C_sys[...] = 0   # clear the simulator's result first
+    mod_sc(A, B, C_sys)
+    np.testing.assert_allclose(C_sys, test_C, atol=1e-3)
+    print("SystemC Cosim Passed!")
+
     mod = df.build(top, target="vitis_hls", mode="hw_emu")
     if hls.is_available("vitis_hls"):
         C_sys = np.zeros((OR, OC), dtype=np.float32)

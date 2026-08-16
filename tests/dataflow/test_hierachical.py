@@ -51,6 +51,13 @@ def test_hierachical_function():
     np.testing.assert_allclose(C2, np.dot(A, B), rtol=1e-5)
     print("Dataflow Simulator Passed!")
 
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_hierachical")
+    C1[...] = 0   # clear the simulator's result first
+    C2[...] = 0   # clear the simulator's result first
+    mod_sc(A, B, C1, C2)
+    np.testing.assert_allclose(C2, np.dot(A, B), rtol=1e-5)
+    print("SystemC Cosim Passed!")
+
     mod = df.build(top)
     print(mod.module)
     assert "scf.for" not in str(mod.module), "SCF ops are not expected in the module"
@@ -108,6 +115,12 @@ def test_hierarchical_omp_deadlock_fix():
     sim_mod = df.build(_outer_streaming, target="simulator")
     sim_mod(result)
     assert result[0] == sum(range(_N)), f"Expected {sum(range(_N))}, got {result[0]}"
+
+    mod_sc = df.build(_outer_streaming, target="systemc", mode="cosim", project="test_hierachical_2")
+    result[...] = 0   # clear the simulator's result first
+    mod_sc(result)
+    assert result[0] == sum(range(_N)), f"Expected {sum(range(_N))}, got {result[0]}"
+    print("SystemC Cosim Passed!")
 
 
 # ---------------------------------------------------------------------------

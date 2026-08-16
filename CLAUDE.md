@@ -2,10 +2,16 @@
 
 ## Quick pitfalls
 
-- **Region arg-order reordering** when scalar in early kernel `args=[...]` → fix in `_build_top`; details: `notes/PITFALLS_DATAFLOW_REGION.md`
-- **OMP segfault at exit** when GC races with OMP threads — set `OMP_NUM_THREADS=N`, run regions in separate processes; details: `notes/PITFALLS_DATAFLOW_REGION.md`
-- **Wrong `LLVM_BUILD_DIR`** — conda `allo` env sets it already (`build-rhel8`); overriding with `build/` → GLIBC_2.33 crash; details: `notes/PITFALLS_DATAFLOW_REGION.md`
-- **Scalar `@df.region()` args** — bare `int32` in `args=[...]` is **rejected** (PR #577); use `int32[1]` → `m_axi`. Auto-capture → `s_axilite` redesign pending upstream; details: `notes/PITFALLS_DATAFLOW_REGION.md`
+Full list with symptoms and fixes: `notes/ALLO_GOTCHAS.md`.
+
+- **`~x` is silently WRONG** — use `(0 - x)`. Corrupted a one-hot grant with no error.
+- **`UInt(N)` locals read back signed** — values ≥ 2^(N-1) flip sign; every width needs one spare bit.
+- **Unused results are deleted** — `MemRefDCE.cpp:28` drops any result-producing op with no uses (the `try_put` ok flag, `memref.atomic_rmw`). Always consume the result.
+- **A `Wire` has no synchronisation** — zero storage AND zero alignment; reads garbage unless both kernels are cycle-locked.
+- **Wrong `LLVM_BUILD_DIR`** — the conda `allo` env sets it already (`build-rhel8`); overriding with `build/` → GLIBC_2.33 crash.
+- **OMP segfault at exit** — GC races OMP teardown; set `OMP_NUM_THREADS=N`, run regions in separate processes.
+- **Scalar `@df.region()` args** — bare `int32` in `args=[...]` is **rejected** (PR #577); use `int32[1]` → `m_axi`.
+- **`Wire`/`Channel` are SystemC-only** — `hls.py:293` raises `NotImplementedError` for any other target.
 
 ## Environment
 
@@ -13,6 +19,7 @@
 conda activate allo
 # LLVM_BUILD_DIR already set in conda env (don't override)
 export OMP_NUM_THREADS=8   # required for multi-kernel simulator
+export PYTHONPATH=/home/zsm9/allo_sup   # else the import grabs installed /home/zsm9/allo
 ```
 
 ## Golden test for dataflow simulator

@@ -235,17 +235,33 @@ def codegen_tcl(top, configs):
     Generates a hierarchical synthesis flow that preserves module boundaries
     so that per-PE and per-interconnect area/power can be extracted from reports.
     """
+    # Clock period in ns. `clock_period` takes precedence over `frequency` when given.
+    #
+    # WHY BOTH: the FPGA-oriented configs think in MHz, but an ASIC flow thinks in ns,
+    # and the period is not merely a constraint here -- Catapult BAKES IT INTO THE
+    # SCHEDULE (how many ops it packs per cycle), so it is the main knob for trading
+    # timing against area. Deriving it from MHz forced the user to convert (2.0 ns =
+    # frequency 500) and silently rounded to one decimal, which made periods like
+    # 3.33 ns unreachable. `frequency` stays supported unchanged.
     if configs.get("clock_period") is not None:
         clock_period = float(configs["clock_period"])
     else:
         frequency = configs.get("frequency", 100)
         clock_period = 1000 / frequency
+    # Render with 1 decimal when that is EXACT, else 3. Periods that were already exact
+    # at 1 decimal (2.0, 4.0, 10.0 ...) regenerate a byte-identical run.tcl.
+    # DELIBERATE SMALL CHANGE: a period that is not exact at 1 decimal now keeps its
+    # digits -- frequency=300 emits 3.333 where it used to emit 3.3. The old value was
+    # 1% TIGHTER than the requested frequency actually implies, i.e. it silently
+    # over-constrained the schedule. Anyone re-running such a project may see a slightly
+    # different (correct) schedule.
     clock_period_str = (
         f"{clock_period:.1f}"
         if abs(clock_period - round(clock_period, 1)) < 1e-9
         else f"{clock_period:.3f}"
     )
     mode = configs.get("mode", "csyn")
+    platform = configs.get("platform", "catapult")
     device = configs.get("device", "nangate-45nm_beh")
     # preserve_hier=True keeps sub-function boundaries in RTL output,
     # enabling per-module area/power breakdown in area.rpt.
@@ -262,19 +278,70 @@ set sfd [file dir [info script]]
 solution new -state initial
 solution options defaults
 solution options set /Input/CppStandard c++11
-solution options set /Input/CompilerFlags {{-D_GLIBCXX_USE_CXX11_ABI=0}}
+"""
 
+    # -D_GLIBCXX_USE_CXX11_ABI=0 matches Catapult's pre-CXX11 libsystemc for the
+    # g++ CSIM compile. OMIT it for csyn/ppa: synthesis doesn't need it (the EDG
+    # front end ignores libstdc++ ABI), and Catapult's SCVerify RTL cosim forwards
+    # this option to xmsc's g++ with the Tcl braces intact -> g++ sees `{-D...}` as
+    # an input filename -> "output files may not be specified when compiling
+    # several" -> the RTL compile dies. Gating it to csim lets Allo-generated
+    # designs cosim (csyn project + SCVerify) without hand-editing the tcl.
+    if mode == "csim":
+        out_str += "solution options set /Input/CompilerFlags {{-D_GLIBCXX_USE_CXX11_ABI=0}}\n"
+
+    # SCVerify RTL cosim: register the flow and pin it to Xcelium/ncsim BEFORE any
+    # source is added, so `go extract` emits Verify_concat_sim_rtl_v_ncsim.mk -- the
+    # makefile that reruns the emitted SystemC testbench against synthesized RTL for a
+    # golden-vs-RTL bit-exact check. (USE_MSIM/USE_VCS off: this flow runs on Xcelium.)
+    # Note: cosim deliberately does NOT set the -D..CXX11_ABI csim flag above; Catapult
+    # forwards it to xmsc's RTL g++ with the Tcl braces intact and breaks that compile.
+    if mode == "cosim":
+        out_str += """flow package require /SCVerify
+flow package option set /SCVerify/USE_NCSIM true
+flow package option set /SCVerify/USE_MSIM false
+flow package option set /SCVerify/USE_VCS false
+"""
+
+    out_str += """
 # Add source files
 solution file add "$sfd/kernel.cpp" -type C++
 """
 
-    # Only include host.cpp for csim mode
-    if mode == "csim":
+    # Only include host.cpp for csim mode. The systemc flow emits a self-contained
+    # kernel.cpp with its own sc_main testbench, so it has NO separate host.cpp.
+    if mode == "csim" and platform != "systemc":
         out_str += 'solution file add "$sfd/host.cpp" -type C++ -exclude true\n'
+
+    # synth_top: synthesize a SUBMODULE instead of the whole region.
+    #
+    # A @df.region() usually contains the design kernels AND testbench kernels -- the
+    # injector/collector that own the host arrays -- plus the AlloMem memories backing
+    # those arrays. Defaulting DESIGN_HIERARCHY to the region top means Catapult
+    # synthesizes all of it, so any reported AREA includes the harness. Measured on a
+    # 4-port wormhole router that was 5,806 um2 of 22,260 -- 26% -- which makes any
+    # comparison against a reference whose top is the design alone badly misleading.
+    #
+    # Each kernel is emitted as its own SC_MODULE named <kernel>_0, with Connections::In/
+    # Out ports bound to the region's channels, so it is a legal synthesis top by itself.
+    #
+    #     df.build(region, target="systemc", mode="csyn", synth_top="router_0")
+    #
+    # The testbench is NOT removed -- csim still drives the full region. Only what
+    # Catapult treats as the top changes, so verification and measurement may differ:
+    #   csim/cosim -> full region (drv/col supply and check the stimulus)
+    #   area/Fmax  -> synth_top=<kernel>_0
+    # NOTE cosim does NOT work against a submodule top: SCVerify wraps the design top and
+    # the input<k>.data -> AlloMem stimulus path disappears. Run those separately.
+    #
+    # There is deliberately NO heuristic for "which kernels are the testbench". Excluding
+    # kernels that take args would work for the common harness shape but is wrong in
+    # general -- a real design's top kernel can legitimately own arrays.
+    design_top = configs.get("synth_top") or top
 
     out_str += f"""
 # Set top-level design function
-directive set -DESIGN_HIERARCHY {top}
+directive set -DESIGN_HIERARCHY {design_top}
 
 # Set clock constraints
 directive set -CLOCKS {{clk {{-CLOCK_PERIOD {clock_period_str}}}}}
@@ -282,6 +349,20 @@ directive set -CLOCKS {{clk {{-CLOCK_PERIOD {clock_period_str}}}}}
 # Set output language
 solution options set /Output/OutputVerilog true
 solution options set /Output/OutputVHDL false
+"""
+
+    # Connections (MatchLib) designs write several non-blocking handshakes per
+    # SC_THREAD body (every NoC router does). Catapult's DEFAULT -IO_MODE fixed
+    # pins each port's vld/dat to a fixed cycle offset, so N-per-body collide ->
+    # SCHD-67/SCHD-30 ("could not schedule even with unlimited resources"). This
+    # is exactly matchlib's own required setting (hls/run_hls_global_setup.tcl):
+    # -IO_MODE super lets the scheduler place each handshake within the loop
+    # window, and -SPECULATE true covers the conditional pushes. Verified: the
+    # whole Channel router (38 PushNB + 38 PopNB) csynths clean with these two.
+    if platform == "systemc":
+        out_str += """
+directive set -IO_MODE super
+directive set -SPECULATE true
 """
 
     # Library selection based on device
@@ -316,13 +397,22 @@ go analyze
     out_str += "go compile\n"
 
     if mode == "csim":
-        out_str += """
+        # NOTE: `solution app linkage/execution` was removed in Catapult 2024.2
+        # (`solution` has no `app` operator). Catapult's own csim now goes through
+        # SCVerify (`flow run /SCVerify/launch_make .../Verify_orig_cxx_osci.mk
+        # SIMTOOL=osci sim`), which requires CCS_DESIGN-wrapped DUTs. The systemc
+        # flow instead emits a self-contained plain-sc_main kernel.cpp, run
+        # directly via the generated `csim.sh` (g++ + $MGC_HOME libsystemc). The
+        # `go compile` above still validates HLS synthesis.
+        if platform != "systemc":
+            out_str += """
 solution app linkage
 solution app execution
 """
 
-    # Continue synthesis if not just csim
-    if mode in {"csyn", "ppa"}:
+    # Continue synthesis if not just csim. cosim needs full synthesis + `go extract`
+    # (that is what generates the SCVerify RTL-cosim makefile), so it runs here too.
+    if mode in {"csyn", "ppa", "cosim"}:
         out_str += """
 solution library add ccs_sample_mem
 go assembly
@@ -370,8 +460,14 @@ def parse_catapult_report(project_path, top):
         m = re.search(r"Max Latency\s*:\s*(\d+)", content)
         if m:
             res["Latency (cycles)"] = m.group(1)
+        else:
+            # hierarchical (SystemC) cycle.rpt: per-process rows
+            #   /top/<kernel>/run  <ops> <latency> <throughput> ...
+            lats = [int(x) for x in re.findall(r"/run\s+\d+\s+(\d+)\s+\d+", content)]
+            if lats:
+                res["Latency (cycles)"] = str(max(lats))
 
-    # --- Area from area.rpt ---
+    # --- Area from area.rpt (function backend) or rtl.rpt (SystemC flow) ---
     area_rpt = os.path.join(sol_dir, "area.rpt")
     if os.path.exists(area_rpt):
         with open(area_rpt, "r") as f:
@@ -379,6 +475,14 @@ def parse_catapult_report(project_path, top):
         m = re.search(r"Total Area\s*:\s*([\d\.]+)", area_content)
         if m:
             res["Area"] = m.group(1)
+    else:
+        rtl_rpt = os.path.join(sol_dir, "rtl.rpt")
+        if os.path.exists(rtl_rpt):
+            with open(rtl_rpt, "r") as f:
+                area_content = f.read()
+            m = re.search(r"TOTAL AREA \(After Assignment\):\s*([\d\.]+)", area_content)
+            if m:
+                res["Area"] = m.group(1)
 
     # --- Power from power.rpt or summary ---
     for power_fname in ("power.rpt", "power_summary.rpt"):

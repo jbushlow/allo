@@ -98,9 +98,16 @@ def test_systolic():
 
     sim_mod = df.build(top, target="simulator")
     sim_mod(A, B, S)
+
     S_1 = smith_waterman_score_matrix(A, B)
     np.testing.assert_equal(S[1:, 1:], S_1[1:, 1:])
     print("Dataflow Simulator Passed!")
+
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_smith_waterman_systolic")
+    S[...] = 0   # clear the simulator's result first
+    mod_sc(A, B, S)
+    np.testing.assert_equal(S[1:, 1:], S_1[1:, 1:])
+    print("SystemC Cosim Passed!")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         mod = df.build(top, target="vitis_hls", mode="hw", project=tmpdir)

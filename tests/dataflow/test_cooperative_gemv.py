@@ -52,11 +52,13 @@ def test_cooperative_gemv():
     np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
     print("Dataflow Simulator Passed!")
 
-    mod = df.build(top)
-    if hls.is_available("vitis_hls"):
-        mod(A, B, C)
-        np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
-        print("Passed!")
+    # Re-zero: C still holds the SIMULATOR's output, so a cosim that wrote nothing
+    # would pass this check on stale data.
+    C = np.zeros((M,), dtype=np.float32)
+    mod = df.build(top, target="systemc", mode="cosim", project="test_cooperative_gemv")
+    mod(A, B, C)
+    np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    print("Passed!")
 
 
 if __name__ == "__main__":

@@ -190,9 +190,17 @@ def test_large_scale_gemm():
     sim_mod = df.build(top, target="simulator")
     print("Start Dataflow Simulator")
     sim_mod(A_packed, B_packed, C_packed)
+
     C = deserialize_C(C_packed.view(np.int8))
     np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
     print("Dataflow Simulator Passed!")
+
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_multi_cache_gemm")
+    C_packed[...] = 0   # clear the simulator's result first
+    mod_sc(A_packed, B_packed, C_packed)
+    C = deserialize_C(C_packed.view(np.int8))
+    np.testing.assert_allclose(C, np.dot(A, B), atol=1e-5)
+    print("SystemC Cosim Passed!")
 
     if hls.is_available("vitis_hls"):
 

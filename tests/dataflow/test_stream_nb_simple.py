@@ -75,6 +75,12 @@ def test_try_put_try_get_sim():
     np.testing.assert_array_equal(np_out, [0, 10, 20, 30])
     print("test_try_put_try_get_sim PASSED")
 
+    mod_sc = df.build(top_nb, target="systemc", mode="cosim", project="test_stream_nb_simple")
+    np_out[...] = 0   # clear the simulator's result first
+    mod_sc(np_out)
+    np.testing.assert_array_equal(np_out, [0, 10, 20, 30])
+    print("SystemC Cosim Passed!")
+
 
 # ---------------------------------------------------------------------------
 # Test 2: Simulator - empty() and full() status flags
@@ -117,6 +123,12 @@ def test_empty_full_sim():
     assert np_out[3] == 1, f"full() should be True after put, got {np_out[3]}"
     assert np_out[4] == 1, f"try_put() should succeed, got {np_out[4]}"
     print("test_empty_full_sim PASSED")
+
+    mod_sc = df.build(nb_status, target="systemc", mode="cosim", project="test_stream_nb_simple_2")
+    np_out[...] = 0   # clear the simulator's result first
+    mod_sc(np_out)
+    assert np_out[4] == 1, f"try_put() should succeed, got {np_out[4]}"
+    print("SystemC Cosim Passed!")
 
 
 # ---------------------------------------------------------------------------

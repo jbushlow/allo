@@ -127,6 +127,12 @@ def test_mlp():
     np.testing.assert_allclose(Y, sim_final_Y, rtol=1e-5)
     print("Dataflow Simulator Passed!")
 
+    mod_sc = df.build(top, target="systemc", mode="cosim", project="test_mlp")
+    sim_final_Y[...] = 0   # clear the simulator's result first
+    mod_sc(X, sim_final_Y)
+    np.testing.assert_allclose(Y, sim_final_Y, rtol=1e-5)
+    print("SystemC Cosim Passed!")
+
     if hls.is_available("vitis_hls"):
         allo_final_Y = np.zeros((BS, NUM_CLASSES), dtype=np.float32)
         with tempfile.TemporaryDirectory() as tmpdir:
