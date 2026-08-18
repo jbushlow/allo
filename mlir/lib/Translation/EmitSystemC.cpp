@@ -902,6 +902,15 @@ void SystemCModuleEmitter::emitValue(Value val, unsigned rank, bool isPtr,
   // Value has been declared before or is a constant number.
   if (isDeclared(val)) {
     os << getName(val);
+    // Generalized PID coordinates remain scalar arguments on a df.kernel. They
+    // are emitted as sc_in ports below, so read the port value in the thread
+    // body instead of treating the port object itself as an arithmetic value.
+    if ((llvm::isa<IntegerType, IndexType>(val.getType())) &&
+        llvm::isa<BlockArgument>(val)) {
+      auto func = llvm::dyn_cast<func::FuncOp>(val.getParentBlock()->getParentOp());
+      if (func && func->hasAttr("df.kernel"))
+        os << ".read()";
+    }
     for (unsigned i = 0; i < rank; ++i)
       os << "[iv" << i << "]";
     return;
@@ -1148,6 +1157,7 @@ void SystemCModuleEmitter::emitKernelModule(func::FuncOp func) {  // new (System
 
   // Ports + members from arguments.
   SmallVector<std::string, 4> streamPorts;
+  SmallVector<std::string, 2> scalarPorts;
   SmallVector<std::string, 4> wireOutPorts; // sc_out wire ports: need reset action
   // valid_only channel ports: (portName, payloadType, dir). Each gets a pair of
   // modulario-annotated accessor methods, mirroring how Connections implements
@@ -1168,7 +1178,14 @@ void SystemCModuleEmitter::emitKernelModule(func::FuncOp func) {  // new (System
       continue;
     }
     indent();
-    if (auto st = llvm::dyn_cast<StreamType>(v.getType())) {
+    if (llvm::isa<IntegerType, IndexType>(v.getType())) {
+      // PID generalization deliberately keeps coordinates as scalar kernel
+      // arguments so all replicas retain one implementation. Model those
+      // compile-time configuration values as ordinary SystemC input ports.
+      std::string pn = std::string(addName(v, /*isPtr=*/false).str());
+      scalarPorts.push_back(pn);
+      os << "sc_in< " << getSCTypeName(v.getType()) << " > " << pn << ";\n";
+    } else if (auto st = llvm::dyn_cast<StreamType>(v.getType())) {
       std::string pn = std::string(addName(v, /*isPtr=*/false).str());
       if (isLocalStream(v)) {
         // self-FIFO (one kernel both produces AND queries it): realized as a
@@ -1324,6 +1341,8 @@ void SystemCModuleEmitter::emitKernelModule(func::FuncOp func) {  // new (System
   // Constructor: name the ports + register a clocked, reset-aware thread.
   indent(); os << "SC_HAS_PROCESS(" << name << ");\n";
   indent(); os << name << "(sc_module_name n) : sc_module(n), done(\"done\")";
+  for (auto &pn : scalarPorts)
+    os << ", " << pn << "(\"" << pn << "\")";
   for (auto &pn : streamPorts)
     os << ", " << pn << "(\"" << pn << "\")";
   os << " {\n";
@@ -2231,6 +2250,18 @@ void SystemCModuleEmitter::emitTopModule(func::FuncOp func) {  // new (SystemC-o
   for (auto &inst : instNames) {
     indent(); os << "sc_signal<bool> " << inst << "_done;\n";
   }
+  // Per-instance configuration signals for generalized PID coordinates.
+  // The call operands are compile-time constants, but using sc_signal/sc_in
+  // keeps the reusable PE module independent of its placement coordinate.
+  for (auto it : llvm::enumerate(calls)) {
+    for (auto opnd : llvm::enumerate(it.value().getOperands())) {
+      if (!llvm::isa<IntegerType, IndexType>(opnd.value().getType()))
+        continue;
+      indent();
+      os << "sc_signal< " << getSCTypeName(opnd.value().getType()) << " > "
+         << instNames[it.index()] << "_cfg" << opnd.index() << ";\n";
+    }
+  }
   // Discover one physical memory per (call, memory-port arg). A grid replica
   // that uses a shared boundary array gets its OWN memory (replication), keyed
   // uniquely by mp<call>_<arg>; its file index comes from the region array.
@@ -2438,6 +2469,29 @@ void SystemCModuleEmitter::emitTopModule(func::FuncOp func) {  // new (SystemC-o
           os << instNames[it.index()] << "." << ca << "(" << rb << ");\n";
         }
         // else: unused arg -> internal array member, nothing to bind.
+      } else if (llvm::isa<IntegerType, IndexType>(ov.getType())) {
+        auto constant = ov.getDefiningOp<arith::ConstantOp>();
+        auto value = constant ? llvm::dyn_cast<IntegerAttr>(constant.getValue())
+                              : IntegerAttr();
+        if (!value) {
+          call.emitError(
+              "SystemC scalar kernel arguments must be compile-time integer "
+              "constants (generalized PID coordinates satisfy this contract)");
+          state.encounteredError = true;
+          return;
+        }
+        std::string signal = instNames[it.index()] + "_cfg" +
+                             std::to_string(opnd.index());
+        indent();
+        os << instNames[it.index()] << "." << getName(carg) << "(" << signal
+           << ");\n";
+        indent();
+        os << signal << ".write(";
+        if (ov.getType().isInteger(1))
+          os << (value.getValue().isZero() ? "false" : "true");
+        else
+          os << value.getValue();
+        os << ");\n";
       }
     }
   }

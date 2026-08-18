@@ -681,6 +681,9 @@ class HLSModule:
         elif self.platform == "catapult":
             extractor = os.path.join(script_dir, "extract_catapult_pe_manifest.py")
             backend_args = ["--project-dir", self.project, "--top", self.top_func_name]
+        elif self.platform == "systemc":
+            extractor = os.path.join(script_dir, "extract_systemc_pe_manifest.py")
+            backend_args = ["--project-dir", self.project, "--top", self.top_func_name]
         else:
             return
         cmd = [

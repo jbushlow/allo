@@ -478,6 +478,23 @@ def test_systemc_stream_depth_flavor():
     print("stream depth honored: 0 -> Combinational, >=1 -> Connections::Fifo")
 
 
+def test_systemc_generalized_pid_scalar_ports():
+    """Generalized coordinates remain config ports so PE replicas can share RTL."""
+    top, _ = _multi_client_grid()
+    code = df.build(
+        top,
+        target="systemc",
+        configs={
+            "generalize_pid_specializations": True,
+            "pid_generalization_policy": "identity_only",
+        },
+    ).hls_code
+    assert "sc_in< ac_int<2, false> >" in code
+    assert ".read()" in code
+    assert "_cfg0.write(0);" in code
+    assert "_cfg0.write(3);" in code
+
+
 @pytest.mark.skipif(
     not os.environ.get("MGC_HOME"),
     reason="Catapult (MGC_HOME) not available — csim needs zhang-21",
