@@ -1224,15 +1224,37 @@ class HLSModule:
                         f"{self.project}/synth.log)."
                     )
 
-                # ---- 3. patch the SCVerify SC shim: ac_int ports need ac_int.h ----
+                # ---- 3. patch the SCVerify SC shim ----
+                # sysc_sim.cpp is a SEPARATE translation unit from kernel.cpp: it sees
+                # only what sysc_sim.h pulls in. So anything the DUT's port types need
+                # has to be injected here as well, not just emitted into kernel.cpp.
+                #   * ac_int.h  -- ac_int-typed ports
+                #   * sc_trace(ac_ieee_float) -- SCVerify traces EVERY port, and
+                #     ac_ieee_float has no sc_trace overload of its own. A float RAM
+                #     data pin (sc_in/sc_out<ac_ieee_float<binary32>>) therefore fails
+                #     the RTL-cosim COMPILE with "no matching function for call to
+                #     sc_trace(...)". Invisible to csim, which never traces, so an
+                #     int32 memory design cosims fine while a float one does not.
+                _SC_TRACE_SHIM = """
+#include <ac_int.h>
+#include <ac_std_float.h>
+#ifndef ALLO_IEEE_FLOAT_SCTRACE_DEF
+#define ALLO_IEEE_FLOAT_SCTRACE_DEF
+template <ac_ieee_float_format Format>
+inline void sc_trace(sc_core::sc_trace_file *tf,
+                     const ac_ieee_float<Format> &v, const std::string &n) {
+  sc_trace(tf, v.data_ac_int(), n);
+}
+#endif
+"""
                 for sh in _glob.glob(f"{syn}/**/sysc_sim.h", recursive=True):
                     s = open(sh, encoding="utf-8").read()
-                    if "ac_int.h" not in s:
+                    if "ALLO_IEEE_FLOAT_SCTRACE_DEF" not in s:
                         with open(sh, "w", encoding="utf-8") as f:
                             f.write(
                                 s.replace(
                                     "#include <systemc.h>",
-                                    "#include <systemc.h>\n#include <ac_int.h>",
+                                    "#include <systemc.h>" + _SC_TRACE_SHIM,
                                 )
                             )
 

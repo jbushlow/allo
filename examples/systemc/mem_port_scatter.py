@@ -31,8 +31,10 @@ if __name__ == "__main__":
     code = df.build(top, target="systemc").hls_code
     open("mem_port_scatter.cpp", "w").write(code)
     print("wrote mem_port_scatter.cpp")
-    assert "AlloMemW<" in code, "expected a write-only AlloMemW for reversed-write B"
-    assert "_req.Push(" in code, "expected a STORE req push in the body"
+    # Memory boundary is RAM PINS now (AlloMemPins + _wadr/_d/_we), not the old
+    # packed-request AlloMemW over Connections.
+    assert "AlloMemPins<" in code, "expected an AlloMemPins instance for B"
+    assert "_wr(" in code, "expected a modulario _wr() store in the body"
     print("emitted AlloMemW + STORE handshake")
 
     if os.environ.get("MGC_HOME"):

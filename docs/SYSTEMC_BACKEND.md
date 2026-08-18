@@ -206,6 +206,35 @@ For synthesis area/Fmax, synthesize a single kernel as the top (excludes the tes
 ALLO_DESIGN_TOP=<kernel>_0  python your_csyn_driver.py     # -> rtl.v + cycle.rpt
 ```
 
+### Selecting the cell library — use `library`, not `device`
+
+This flow targets an **ASIC standard-cell library**, so the config key is `library`:
+
+```python
+df.build(design, target="systemc", mode="csyn", project="out/csyn",
+         configs={"clock_period": 2.0, "library": "nangate-45nm_beh"})
+```
+
+`device` is still accepted as a legacy spelling, but it is the wrong word here and it
+caused a real bug: `device` means an FPGA **part** to `vitis_hls` (`u280`) and a **cell
+library** to Catapult. A script driving both backends with one `--device` flag therefore
+sent `u280` here, which became `solution library add u280` and failed deep inside a csyn
+run with `Could not locate library file for library name u280`.
+
+Resolution, designed so such a script is fixed by *adding* one key rather than
+restructuring:
+
+| configs | library used |
+|---|---|
+| `{"library": L}` | `L` — any `device` is the other backend's and is ignored |
+| `{"device": L}` where `L` is not an FPGA part | `L` (legacy; custom ASIC libraries keep working) |
+| `{"device": <FPGA part>}` with no `library` | **error**, naming the fix |
+| neither | `nangate-45nm_beh` |
+
+An FPGA part with no `library` errors rather than silently defaulting: quietly picking a
+library the caller never chose would hand back an area number measured against the wrong
+technology.
+
 Environment knobs: `ALLO_SYNC_RESET` (synchronous reset), and — for the steady-state loop
 transform — the kernel's outermost `for t` must have a **dead counter** and no memory-port store.
 

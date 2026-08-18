@@ -278,6 +278,15 @@ private:
   // with an ac_ieee_float operand otherwise fails template deduction).
   void emitMaxMin(Operation *op, const char *syntax) override;
 
+  // Slice assignment (`A[pid, :] = v`) lowers to memref.subview + memref.copy. The base
+  // emits the subview as a POINTER into the array (`T *v2 = &v0[0][0];`) -- but a
+  // memory-port array is PINS, there is no array to point into. So record the subview's
+  // flat offset instead and let the copy address the memory through _rd/_wr.
+  void emitSubView(memref::SubViewOp op) override;
+  void emitCopy(memref::CopyOp op) override;
+  // subview result -> (memory-port base, flat offset expression)
+  llvm::DenseMap<Value, std::pair<Value, std::string>> memPortSubviews;
+
   // Stateful globals (`x: T @ Stateful`). The base emits them as function-scope
   // `static`s -- correct for a C function that is CALLED REPEATEDLY, wrong for an
   // SC_THREAD (see the reset-action block in emitKernelModule).
@@ -322,7 +331,7 @@ private:
   void emitSetSlice(allo::SetIntSliceOp op) override;
 
   // Random-access accesses to a memory-port arg via the memref dialect (dynamic
-  // / 2-D indices) -- mirror the affine load/store rewrites (req.Push/rsp.Pop);
+  // / 2-D indices) -- mirror the affine load/store rewrites (_rd/_wr accessors);
   // non-mem-port memrefs (local %alloc arrays) fall back to the base emitter.
   void emitLoad(memref::LoadOp op) override;
   void emitStore(memref::StoreOp op) override;
@@ -375,10 +384,10 @@ private:
 
   // Region boundary array routed to an internal memory (random-access port):
   //   dir 'i' -> AlloMem  (LOAD, req+rsp), preloaded from input<inIdx>.data
-  //   dir 'o' -> AlloMemW (STORE, req only), read out to output<outIdx>.data
+  //   dir 'o' -> write-only RAM pins, read out to output<outIdx>.data
   //   dir 'b' -> AlloMem  (LOAD+STORE, req+rsp): preloaded AND read out (in-place)
   struct MemArray {
-    std::string base;   // region arg name (kernel binds base_req[/base_rsp])
+    std::string base;   // region arg name (kernel binds base_radr/_re/_q, _wadr/_d/_we)
     std::string ctype;  // element C type
     int64_t total;      // element count (memory depth)
     unsigned addrw, dataw;
@@ -404,6 +413,12 @@ private:
     unsigned addrw, dataw;
     char dir;           // 'i' read / 'o' write / 'b' read+write
     int inIdx, outIdx;  // the region array's input/output file indices (-1 = none)
+    std::string base;   // REGION array this replicates -- the grouping key. Several
+                        // MemInsts share a base exactly when the array is replicated
+                        // across clients, which decides whether it can be exposed as
+                        // a top-level port (see the port-emission comment).
+    bool exposed;       // true -> lives in the tb, reachable through top ports;
+                        // false -> stays an internal memory (multi-client replica)
   };
   SmallVector<MemInst> memInsts;
 
@@ -461,6 +476,153 @@ char SystemCModuleEmitter::argDir(func::FuncOp func, unsigned i) {  // new (Syst
     return 0;
   char c = s[i];
   return (c == 'i' || c == 'o' || c == 'b') ? c : 0;
+}
+
+// Subview of a memory-port array. The base emits `T *p = &arr[i][j];`, which needs an
+// actual array; with RAM pins there is none. Emit nothing and remember where the slice
+// starts, so the memref.copy that consumes it can drive the pins directly.
+void SystemCModuleEmitter::emitSubView(memref::SubViewOp op) {  // override (base emitter)
+  Value src = op.getSource();
+  if (!memPortArgDir(src)) {
+    CatapultModuleEmitter::emitSubView(op);
+    return;
+  }
+  auto srcType = llvm::cast<MemRefType>(src.getType());
+  auto shape = srcType.getShape();
+  unsigned n = shape.size();
+  if (!srcType.hasStaticShape()) {
+    emitError(op, "memref.subview of a memory port requires a static shape.");
+    return;
+  }
+  // The offset arithmetic below collapses the slice to `base + flat_offset`, i.e. it
+  // assumes a CONTIGUOUS run. The base emitter validates exactly this before taking a
+  // pointer, and dropping the checks here would not fail -- it would silently address
+  // the wrong elements. So refuse what cannot be linearised, rather than miscompute it.
+  for (auto s : op.getMixedStrides()) {
+    auto attr = llvm::dyn_cast_or_null<Attribute>(s);
+    if (!attr || llvm::cast<IntegerAttr>(attr).getInt() != 1) {
+      emitError(op, "only unit-stride memref.subview is supported on a memory port.");
+      return;
+    }
+  }
+  auto sizes = op.getMixedSizes();
+  for (unsigned k = 1; k < sizes.size() && k < n; ++k) {
+    auto attr = llvm::dyn_cast_or_null<Attribute>(sizes[k]);
+    if (!attr || llvm::cast<IntegerAttr>(attr).getInt() != shape[k]) {
+      emitError(op, "only a contiguous memref.subview is supported on a memory port.");
+      return;
+    }
+  }
+  SmallVector<int64_t> stride(n);
+  int64_t acc = 1;
+  for (int k = (int)n - 1; k >= 0; --k) { stride[k] = acc; acc *= shape[k]; }
+  std::string off;
+  auto offsets = op.getMixedOffsets();
+  for (unsigned k = 0; k < offsets.size() && k < n; ++k) {
+    std::string term;
+    if (auto attr = llvm::dyn_cast_or_null<Attribute>(offsets[k])) {
+      int64_t v = llvm::cast<IntegerAttr>(attr).getInt();
+      if (v == 0)
+        continue;
+      term = std::to_string(v);
+    } else {
+      term = std::string(getName(llvm::cast<Value>(offsets[k])).str());
+    }
+    if (stride[k] != 1)
+      term = "(" + term + ") * " + std::to_string(stride[k]);
+    off = off.empty() ? term : off + " + " + term;
+  }
+  if (off.empty())
+    off = "0";
+  memPortSubviews[op.getResult()] = {src, off};
+  indent();
+  os << "// slice of memory-port array " << getName(src) << " at flat offset " << off;
+  emitInfoAndNewLine(op);
+}
+
+// Whole-array copy. If either side is a memory port (directly, or through the subview
+// recorded above) the element access has to go through the _rd/_wr accessors instead of
+// array indexing.
+void SystemCModuleEmitter::emitCopy(memref::CopyOp op) {  // override (base emitter)
+  Value src = op.getSource(), dst = op.getTarget();
+  auto resolve = [&](Value v, Value &base, std::string &off) -> bool {
+    auto it = memPortSubviews.find(v);
+    if (it != memPortSubviews.end()) {
+      base = it->second.first;
+      off = it->second.second;
+      return true;
+    }
+    if (memPortArgDir(v)) {
+      base = v;
+      off = "0";
+      return true;
+    }
+    return false;
+  };
+  Value sBase, dBase;
+  std::string sOff, dOff;
+  bool sMem = resolve(src, sBase, sOff);
+  bool dMem = resolve(dst, dBase, dOff);
+  if (!sMem && !dMem) {
+    CatapultModuleEmitter::emitCopy(op);
+    return;
+  }
+  auto cpType = llvm::dyn_cast<MemRefType>(sMem ? dst.getType() : src.getType());
+  if (!cpType || !cpType.hasStaticShape()) {
+    emitError(op, "memref.copy on a memory port requires a statically shaped operand.");
+    return;
+  }
+  auto shape = cpType.getShape();
+  unsigned n = shape.size();
+  // Flat index over the copied region, used for whichever side is a memory port.
+  SmallVector<int64_t> stride(n);
+  int64_t acc = 1;
+  for (int k = (int)n - 1; k >= 0; --k) { stride[k] = acc; acc *= shape[k]; }
+  auto flat = [&](const std::string &off) {
+    std::string e = off;
+    for (unsigned k = 0; k < n; ++k) {
+      std::string t = "_cp" + std::to_string(k);
+      if (stride[k] != 1)
+        t = "(" + t + ") * " + std::to_string(stride[k]);
+      e += " + " + t;
+    }
+    return e;
+  };
+  indent(); os << "{\n";
+  addIndent();
+  for (unsigned k = 0; k < n; ++k) {
+    indent();
+    os << "for (int _cp" << k << " = 0; _cp" << k << " < " << shape[k] << "; ++_cp" << k
+       << ") {\n";
+    addIndent();
+  }
+  indent();
+  if (dMem) {
+    os << getName(dBase) << "_wr((ac_int<"
+       << scAddrW(llvm::cast<MemRefType>(dBase.getType()).getNumElements())
+       << ", false>)(" << flat(dOff) << "), ";
+    if (sMem)
+      os << getName(sBase) << "_rd((ac_int<"
+         << scAddrW(llvm::cast<MemRefType>(sBase.getType()).getNumElements())
+         << ", false>)(" << flat(sOff) << "))";
+    else {
+      emitValue(src);
+      for (unsigned k = 0; k < n; ++k)
+        os << "[_cp" << k << "]";
+    }
+    os << ");\n";
+  } else { // source is the memory port, destination a plain array
+    emitValue(dst);
+    for (unsigned k = 0; k < n; ++k)
+      os << "[_cp" << k << "]";
+    os << " = " << getName(sBase) << "_rd((ac_int<"
+       << scAddrW(llvm::cast<MemRefType>(sBase.getType()).getNumElements())
+       << ", false>)(" << flat(sOff) << "));\n";
+  }
+  for (unsigned k = 0; k < n; ++k) { reduceIndent(); indent(); os << "}\n"; }
+  reduceIndent();
+  indent(); os << "}";
+  emitInfoAndNewLine(op);
 }
 
 // A `x: T @ Stateful` variable. The frontend lowers it to a private memref.global
@@ -586,7 +748,7 @@ char SystemCModuleEmitter::streamArgDir(Value v) {  // new (SystemC-only)
 
 // A df.kernel memref arg that is directional but NOT sequentially streamable is a
 // random-access memory port. Returns its dir: 'i' load (AlloMem req+rsp), 'o' store
-// (AlloMemW req-only), 'b' read+modify+write (AlloMem req+rsp); else 0.
+// (write pins only), 'b' read+modify+write (both pin bundles); else 0.
 char SystemCModuleEmitter::memPortArgDir(Value v) {  // new (SystemC-only)
   auto barg = llvm::dyn_cast<BlockArgument>(v);
   if (!barg || !llvm::isa<MemRefType>(v.getType()))
@@ -664,6 +826,17 @@ void SystemCModuleEmitter::emitAffineFor(affine::AffineForOp op) {  // override 
   emitLoopDirectivesPreheader(op);
   // Header twice, body ONCE: both branches open exactly one brace.
   os << "#ifdef __SYNTHESIS__\n";
+  // This loop never exits, so the `done.write(true)` that emitFunction places AFTER the
+  // body is UNREACHABLE in RTL -- and the region's _agg_done ANDs every kernel's done,
+  // so one steady-state kernel keeps the whole region's `done` low forever. A
+  // free-running kernel has no "finished"; the honest RTL signal is "running", so raise
+  // it on entry. csim takes the #else branch and still completes normally.
+  if (auto pf = op->getParentOfType<func::FuncOp>())
+    if (pf->hasAttr("df.kernel")) {
+      indent();
+      os << "done.write(true);  // steady-state: no completion, so assert on entry "
+            "(the post-body write is unreachable here)\n";
+    }
   indent();
   os << "while (1) {  // steady-state loop (was `for t`): 1 iteration = 1 step\n";
   os << "#else\n";
@@ -794,8 +967,10 @@ void SystemCModuleEmitter::emitFlatIndexMemref(ValueRange indices,
   os << ")";
 }
 
-// LOAD from a random-access memory port: result = mem[idx] -> req.Push(LOAD,
-// addr); result = rsp.Pop();  (flat index emitted by `emitIdx`).
+// LOAD from a random-access memory port -> the RAM-pin accessor:
+//   result = <arr>_rd(addr);      (flat index emitted by `emitIdx`)
+// The accessor itself is generated per array in emitKernelModule and carries
+// `#pragma design modulario`; see there for why the read waits twice.
 void SystemCModuleEmitter::emitMemPortLoad(Value memref, Value result,
                                            bool isUnsigned,
                                            llvm::function_ref<void()> emitIdx) {  // new (SystemC-only)
@@ -804,50 +979,40 @@ void SystemCModuleEmitter::emitMemPortLoad(Value memref, Value result,
   int64_t total = 1;
   for (auto d : mt.getShape())
     total *= d;
-  std::string reqT = "ac_int<" +
-                     std::to_string(1 + scAddrW(total) +
-                                    scDataW(mt.getElementType())) +
-                     ", false>";
+  std::string aT = "ac_int<" + std::to_string(scAddrW(total)) + ", false>";
   auto nm = getName(memref);
   indent();
   emitValue(result);
   os << ";\n";
-  indent();
-  os << nm << "_req.Push( (" << reqT << ")(";
-  emitIdx();
-  os << ") << 1 );\n"; // opcode bit0 = 0 (LOAD), addr in bits [1..]
+  // One call to the generated accessor; the pin sequence and its two clock edges live
+  // in <arr>_rd() (emitKernelModule), which carries `#pragma design modulario`.
   indent();
   emitValue(result);
-  os << " = " << nm << "_rsp.Pop();";
+  os << " = " << nm << "_rd((" << aT << ")(";
+  emitIdx();
+  os << "));";
 }
 
-// STORE to a random-access memory port: mem[idx] = value -> a packed req (no
-// response; AlloMem/AlloMemW applies it).  (flat index emitted by `emitIdx`.)
+// STORE to a random-access memory port -> the RAM-pin accessor:
+//   <arr>_wr(addr, value);        (flat index emitted by `emitIdx`)
 void SystemCModuleEmitter::emitMemPortStore(Value memref, Value value,
                                             llvm::function_ref<void()> emitIdx) {  // new (SystemC-only)
   auto mt = llvm::cast<MemRefType>(memref.getType());
   int64_t total = 1;
   for (auto d : mt.getShape())
     total *= d;
-  unsigned addrw = scAddrW(total);
-  std::string reqT =
-      "ac_int<" + std::to_string(1 + addrw + scDataW(mt.getElementType())) +
-      ", false>";
+  std::string aT = "ac_int<" + std::to_string(scAddrW(total)) + ", false>";
   auto nm = getName(memref);
-  indent();
-  // req = (wdata << (1+ADDRW)) | (addr << 1) | 1   (opcode bit0 = 1 = STORE)
-  os << nm << "_req.Push( ((" << reqT << ")(";
-  // Transport the raw bit pattern for a float (an ac_int has no ctor from
-  // half/ac_ieee_float); AlloMem/AlloMemW reconstruct via _mem_decode<T>.
-  bool isFloat = llvm::isa<FloatType>(value.getType());
-  if (isFloat)
-    os << "_fbits(";
-  emitValue(value);
-  if (isFloat)
-    os << ")";
-  os << ") << " << (1 + addrw) << ") | ((" << reqT << ")(";
+  // One call to the generated accessor; the pin sequence lives in <arr>_wr().
+  //
+  // The value rides its own data pin at its natural type, so the float `_fbits()`
+  // round-trip that the packed request used to need is gone -- there is no longer an
+  // ac_int to squeeze a half/ac_ieee_float into.
+  indent(); os << nm << "_wr((" << aT << ")(";
   emitIdx();
-  os << ") << 1) | (" << reqT << ")1 );";
+  os << "), ";
+  emitValue(value);
+  os << ");";
 }
 
 // memref.load: mem-port arg -> req/rsp; local %alloc array -> base emitter.
@@ -933,7 +1098,7 @@ void SystemCModuleEmitter::emitValue(Value val, unsigned rank, bool isPtr,
 // 'half *' to 'void *'"), aborting `go compile`. g++ csim accepts it, so it only
 // surfaces at synthesis. When a fp16/fp32 is involved we therefore reinterpret via
 // the float type's own bit accessors -- data_ac_int()/set_data() -- which synthesize
-// (the same idiom the memory-port _fbits/_mem_decode helpers use). The generic
+// (the same idiom the _fbits helper uses). The generic
 // int<->int (and double) path keeps the memcpy, which is fine for trivial PODs.
 void SystemCModuleEmitter::emitBitcast(arith::BitcastOp op) {  // override (base emitter)
   Value result = op.getResult();
@@ -1090,7 +1255,7 @@ void SystemCModuleEmitter::emitSetSlice(allo::SetIntSliceOp op) {  // override (
 
 // Sequential-stream read:  <result> = <port>.Pop();   (index ignored — in order)
 void SystemCModuleEmitter::emitAffineLoad(affine::AffineLoadOp op) {  // override (base emitter)
-  // Random-access INPUT ('i') or read+write ('b') memory port: LOAD via req/resp.
+  // Random-access INPUT ('i') or read+write ('b') memory port: LOAD via the read pins.
   if (char d = memPortArgDir(op.getMemRef()); d == 'i' || d == 'b') {
     emitMemPortLoad(op.getMemRef(), op.getResult(), op->hasAttr("unsigned"),
                     [&]() { emitFlatIndex(op); });
@@ -1113,8 +1278,8 @@ void SystemCModuleEmitter::emitAffineLoad(affine::AffineLoadOp op) {  // overrid
 
 // Sequential-stream write:  <port>.Push(<value>);   (index ignored — in order)
 void SystemCModuleEmitter::emitAffineStore(affine::AffineStoreOp op) {  // override (base emitter)
-  // Random-access OUTPUT ('o') or read+write ('b') memory port: STORE via a
-  // packed req (no response; the AlloMem/AlloMemW applies it).
+  // Random-access OUTPUT ('o') or read+write ('b') memory port: STORE via the write
+  // pins (no response; the memory applies it).
   if (char d = memPortArgDir(op.getMemRef()); d == 'o' || d == 'b') {
     emitMemPortStore(op.getMemRef(), op.getValueToStore(),
                      [&]() { emitFlatIndex(op); });
@@ -1158,11 +1323,25 @@ void SystemCModuleEmitter::emitKernelModule(func::FuncOp func) {  // new (System
   // Ports + members from arguments.
   SmallVector<std::string, 4> streamPorts;
   SmallVector<std::string, 2> scalarPorts;
-  SmallVector<std::string, 4> wireOutPorts; // sc_out wire ports: need reset action
+  // sc_out wire ports needing a reset-action write (Catapult CIN-233), each paired
+  // with the ZERO EXPRESSION for its type. A plain `0` is wrong for a float payload:
+  // sc_out<ac_ieee_float<binary32>>::write takes const T& and there is no implicit
+  // int->T conversion, so `.write(0)` fails to compile.
+  SmallVector<std::pair<std::string, std::string>, 4> wireOutPorts;
+
+  // Zero literal for a payload type: floats need an explicit construction.
+  auto zeroOf = [&](Type et, const std::string &tn) -> std::string {
+    return llvm::isa<FloatType>(et) ? (tn + "(0.0f)") : std::string("0");
+  };
   // valid_only channel ports: (portName, payloadType, dir). Each gets a pair of
   // modulario-annotated accessor methods, mirroring how Connections implements
   // Push/PushNB/Pop/PopNB -- see emitValidOnlyAccessors.
   SmallVector<std::tuple<std::string, std::string, char>, 4> vonlyPorts;
+  // Memory-pin arrays: {port name, address type, data type, dir}. Drives the generated
+  // _rd/_wr accessors below -- the RAM pin sequence must live in a METHOD so it can
+  // carry `#pragma design modulario`, which is what makes Catapult treat it as a
+  // cycle-accurate interface instead of signal writes it may schedule freely.
+  SmallVector<std::tuple<std::string, std::string, std::string, char>, 4> memPins;
   // Self-FIFO base name + depth: this kernel maintains a synchronous occupancy
   // counter per self-FIFO so empty()/full() read the LOGICAL fill (put -> ++,
   // get -> --) instead of the clocked AlloFifo's handshake, which lags by a cycle
@@ -1233,8 +1412,10 @@ void SystemCModuleEmitter::emitKernelModule(func::FuncOp func) {  // new (System
         // A driven sc_out must still be written in the reset action (CIN-233), so
         // an OUT bundle's two ports are tracked in wireOutPorts like a Wire's.
         if (d == 'o') {
-          wireOutPorts.push_back(pn + "_dat");
-          wireOutPorts.push_back(pn + "_vld");
+          // A float-payload valid_only channel hits the same int->T problem.
+          std::string vzero = zeroOf(ct.getBaseType(), T);
+          wireOutPorts.push_back({pn + "_dat", vzero});
+          wireOutPorts.push_back({pn + "_vld", "0"});
         }
         os << (d == 'o' ? "sc_out< " : "sc_in< ") << T << " > " << pn << "_dat;\n";
         indent();
@@ -1254,7 +1435,7 @@ void SystemCModuleEmitter::emitKernelModule(func::FuncOp func) {  // new (System
       char d = streamDir(func, i);
       std::string pn = std::string(addName(v, /*isPtr=*/false).str());
       if (d == 'o')
-        wireOutPorts.push_back(pn);
+        wireOutPorts.push_back({pn, "0"});
       os << (d == 'o' ? "sc_out< " : "sc_in< ");
       os << getStreamPayloadTypeName(wt.getBaseType(), linkPayloadUnsigned(v)) << " > " << pn << ";\n";
     } else if (auto mt = llvm::dyn_cast<MemRefType>(v.getType())) {
@@ -1267,38 +1448,62 @@ void SystemCModuleEmitter::emitKernelModule(func::FuncOp func) {  // new (System
         os << (d == 'o' ? "Connections::Out< " : "Connections::In< ");
         os << getStreamPayloadTypeName(mt.getElementType(), linkPayloadUnsigned(v)) << " > " << pn << ";\n";
       } else if (d == 'i' || d == 'b') {
-        // random-access INPUT ('i') or read+write ('b') array -> memory port:
-        // Out<req> + In<T>. Body loads become req.Push(LOAD,addr)/rsp.Pop() and
-        // (for 'b') stores become req.Push(STORE,addr,val) (affine overrides).
+        // random-access INPUT ('i') or read+write ('b') array -> RAM pins. 'i' gets
+        // the read bundle; 'b' additionally gets the write bundle below, because it
+        // both loads and stores through the same boundary array.
         std::string pn = std::string(addName(v, /*isPtr=*/false).str());
         int64_t total = 1;
         for (auto s : mt.getShape())
           total *= s;
-        std::string reqT =
-            "ac_int<" +
-            std::to_string(1 + scAddrW(total) + scDataW(mt.getElementType())) +
-            ", false>";
-        std::string reqn = pn + "_req", rspn = pn + "_rsp";
-        streamPorts.push_back(reqn);
-        streamPorts.push_back(rspn);
-        os << "Connections::Out< " << reqT << " > " << reqn << ";\n";
-        indent();
-        os << "Connections::In< " << getStreamPayloadTypeName(mt.getElementType(), linkPayloadUnsigned(v)) << " > "
-           << rspn << ";\n";
+        // RAM PINS, not a Connections req/rsp pair: address+enable out, data in.
+        // Matches Catapult's ccs_ramifc_w_handshake_r and the Vitis path's
+        // _rsc_radr/_re/_q, so the boundary is a memory an integrator recognises.
+        // These are raw sc_ports: no .Reset(), so the driven ones are registered in
+        // wireOutPorts, which writes them in the reset action (Catapult CIN-233).
+        std::string aT = "ac_int<" + std::to_string(scAddrW(total)) + ", false>";
+        std::string dT = std::string(getStreamPayloadTypeName(
+            mt.getElementType(), linkPayloadUnsigned(v)).str());
+        wireOutPorts.push_back({pn + "_radr", "0"});
+        wireOutPorts.push_back({pn + "_re", "0"});
+        os << "sc_out< " << aT << " > " << pn << "_radr;\n";
+        indent(); os << "sc_out<bool> " << pn << "_re;\n";
+        indent(); os << "sc_in< " << dT << " > " << pn << "_q;\n";
+        // _rrdy: the memory's "I can serve you" line. INPUT, so it is not in
+        // wireOutPorts (which exists to drive sc_outs in the reset action).
+        indent(); os << "sc_in<bool> " << pn << "_rrdy;\n";
+        if (d == 'b') { // read+write: add the write side of the same memory
+          std::string dzero = zeroOf(mt.getElementType(), dT);
+          wireOutPorts.push_back({pn + "_wadr", "0"});
+          wireOutPorts.push_back({pn + "_d", dzero});
+          wireOutPorts.push_back({pn + "_we", "0"});
+          indent(); os << "sc_out< " << aT << " > " << pn << "_wadr;\n";
+          indent(); os << "sc_out< " << dT << " > " << pn << "_d;\n";
+          indent(); os << "sc_out<bool> " << pn << "_we;\n";
+          indent(); os << "sc_in<bool> " << pn << "_wrdy;\n";
+        }
+        memPins.push_back({pn, aT, dT, d});
       } else if (d == 'o') {
-        // random-access OUTPUT array -> write-only memory port: Out<req> only.
-        // Body stores become req.Push(STORE,addr,val) (affine store override).
+        // random-access OUTPUT array -> write-only RAM pins. Body stores become
+        // <arr>_wr(addr, val) via the affine store override.
         std::string pn = std::string(addName(v, /*isPtr=*/false).str());
         int64_t total = 1;
         for (auto s : mt.getShape())
           total *= s;
-        std::string reqT =
-            "ac_int<" +
-            std::to_string(1 + scAddrW(total) + scDataW(mt.getElementType())) +
-            ", false>";
-        std::string reqn = pn + "_req";
-        streamPorts.push_back(reqn);
-        os << "Connections::Out< " << reqT << " > " << reqn << ";\n";
+        // RAM PINS (write side), mirroring ccs_ramifc_w_handshake_w: address, data
+        // and enable all OUT. No data comes back, so there is no `q` here -- the
+        // write-only case is genuinely 3 pins, not a truncated read port.
+        std::string aT = "ac_int<" + std::to_string(scAddrW(total)) + ", false>";
+        std::string dT = std::string(getStreamPayloadTypeName(
+            mt.getElementType(), linkPayloadUnsigned(v)).str());
+        std::string dzero = zeroOf(mt.getElementType(), dT);
+        wireOutPorts.push_back({pn + "_wadr", "0"});
+        wireOutPorts.push_back({pn + "_d", dzero});
+        wireOutPorts.push_back({pn + "_we", "0"});
+        os << "sc_out< " << aT << " > " << pn << "_wadr;\n";
+        indent(); os << "sc_out< " << dT << " > " << pn << "_d;\n";
+        indent(); os << "sc_out<bool> " << pn << "_we;\n";
+        indent(); os << "sc_in<bool> " << pn << "_wrdy;\n";
+        memPins.push_back({pn, aT, dT, d});
       } else {
         // non-directional memref -> internal array member (fallback)
         os << getSCTypeName(mt.getElementType()) << " " << addName(v, /*isPtr=*/false);
@@ -1371,6 +1576,38 @@ void SystemCModuleEmitter::emitKernelModule(func::FuncOp func) {  // new (System
   //  * `#pragma design modulario` is what makes Catapult treat these as a
   //    cycle-accurate LI interface instead of ordinary signal accesses it may
   //    schedule freely. Every Connections port method carries it; ours must too.
+  // RAM-pin accessors. Same reasoning as the valid_only ones above: the sequence has
+  // to be a METHOD carrying `#pragma design modulario`, or Catapult is free to move the
+  // signal writes around and the fixed read latency stops holding.
+  for (auto &mp : memPins) {
+    const std::string &pn = std::get<0>(mp);
+    const std::string &aT = std::get<1>(mp);
+    const std::string &dT = std::get<2>(mp);
+    char d = std::get<3>(mp);
+    if (d == 'i' || d == 'b') {
+      indent(); os << "#pragma design modulario <in>\n";
+      indent(); os << dT << " " << pn << "_rd(" << aT << " addr) {\n";
+      indent(); os << "  " << pn << "_radr.write(addr); " << pn << "_re.write(true);\n";
+      // FIXED two-edge access. A stall loop here (`do { wait(); } while (!_rrdy)`) was
+      // tried and does NOT synthesize: a modulario method is a fixed-protocol C-CORE, and
+      // a data-dependent loop inside it fails with ASM-2 / BASIC-25. See EmitSystemC.md.
+      indent(); os << "  wait();                    // edge N: address captured\n";
+      indent(); os << "  " << pn << "_re.write(false);\n";
+      indent(); os << "  wait();                    // data valid on this edge\n";
+      indent(); os << "  return " << pn << "_q.read();\n";
+      indent(); os << "}\n";
+    }
+    if (d == 'o' || d == 'b') {
+      indent(); os << "#pragma design modulario <out>\n";
+      indent(); os << "void " << pn << "_wr(" << aT << " addr, " << dT << " val) {\n";
+      indent(); os << "  " << pn << "_wadr.write(addr); " << pn << "_d.write(val);\n";
+      indent(); os << "  " << pn << "_we.write(true);\n";
+      // FIXED single edge, for the same reason as the read above.
+      indent(); os << "  wait();\n";
+      indent(); os << "  " << pn << "_we.write(false);\n";
+      indent(); os << "}\n";
+    }
+  }
   for (auto &vp : vonlyPorts) {
     const std::string &pn = std::get<0>(vp);
     const std::string &T = std::get<1>(vp);
@@ -1490,8 +1727,8 @@ void SystemCModuleEmitter::emitKernelModule(func::FuncOp func) {  // new (System
     }
   }
   // Raw sc_out wire ports must be driven in the reset action (Catapult CIN-233).
-  for (auto &pn : wireOutPorts) {
-    indent(); os << pn << ".write(0);\n";
+  for (auto &wp : wireOutPorts) {
+    indent(); os << wp.first << ".write(" << wp.second << ");\n";
   }
   indent(); os << "done.write(false);  // completion flag low until the pass finishes\n";
   indent(); os << "wait();\n";
@@ -1813,10 +2050,7 @@ void SystemCModuleEmitter::emitStreamPut(StreamPutOp op) {  // override (base em
         int64_t total = 1;
         for (auto dim : mt.getShape())
           total *= dim;
-        std::string reqT =
-            "ac_int<" +
-            std::to_string(1 + scAddrW(total) + scDataW(mt.getElementType())) +
-            ", false>";
+        std::string aT = "ac_int<" + std::to_string(scAddrW(total)) + ", false>";
         auto dn = getName(data);
         SmallVector<int64_t> stride(rank);
         int64_t s = 1;
@@ -1824,8 +2058,11 @@ void SystemCModuleEmitter::emitStreamPut(StreamPutOp op) {  // override (base em
           stride[k] = s;
           s *= mt.getShape()[k];
         }
+        // Whole-block put of a memory-port array: read each element through the same
+        // RAM-pin accessor the ordinary loads use, then push it onto the stream.
         indent();
-        os << dn << "_req.Push( (" << reqT << ")(";
+        emitValue(stream, 0, false);
+        os << ".Push( " << dn << "_rd((" << aT << ")(";
         for (int k = 0; k < rank; ++k) {
           if (k)
             os << " + ";
@@ -1833,10 +2070,7 @@ void SystemCModuleEmitter::emitStreamPut(StreamPutOp op) {  // override (base em
           if (stride[k] != 1)
             os << " * " << stride[k];
         }
-        os << ") << 1 );\n"; // opcode bit0 = 0 (LOAD)
-        indent();
-        emitValue(stream, 0, false);
-        os << ".Push( " << dn << "_rsp.Pop() );\n";
+        os << ")) );\n";
         for (int i = 0; i < rank; ++i) {
           reduceIndent();
           indent();
@@ -2290,26 +2524,84 @@ void SystemCModuleEmitter::emitTopModule(func::FuncOp func) {  // new (SystemC-o
                std::to_string(opnd.index()),
            instNames[it.index()], std::string(getName(carg).str()),
            std::string(getStreamPayloadTypeName(mt.getElementType(), linkPayloadUnsigned(carg)).str()), total,
-           scAddrW(total), scDataW(mt.getElementType()), mp, ii, oo});
+           scAddrW(total), scDataW(mt.getElementType()), mp, ii, oo,
+           std::string(getName(ov).str()), /*exposed=*/false});
     }
   }
-  // Memory-port members: a req channel + memory (+ rsp channel for read-capable
-  // ports). 'i'/'b' -> AlloMem (req + rsp); 'o' -> AlloMemW (req only).
+  // Decide which memories can become TOP-LEVEL PORTS.
+  //
+  // A boundary array touched by N kernels is REPLICATED into N memories (see the MemInst
+  // comment). Inside the design that is a private trick the testbench compensates for:
+  // reads preload every replica from the same file, writes are summed across replicas at
+  // readout. At the BOUNDARY it stops being private and becomes the interface contract --
+  // an array shared by 15 kernels would present 15 request ports carrying identical reads,
+  // and a shared output would present 10 write ports whose values the integrator is
+  // somehow expected to sum. Measured on the current suite: test_hierachical replicates 4
+  // input arrays into 60 memories and 2 outputs into 20. That is not an interface anyone
+  // can wire.
+  //
+  // So only a SINGLE-CLIENT array is exposed. A replicated one keeps the old behaviour --
+  // memory inside the design -- which is still wrong for area but at least honest and
+  // wireable, and keeps the existing designs passing. Exposing those properly needs one
+  // memory with an arbiter behind a single port pair (the AlloMemShared component), which
+  // is separate work.
+  {
+    llvm::StringMap<unsigned> clients;
+    for (auto &mi : memInsts)
+      clients[mi.base]++;
+    for (auto &mi : memInsts)
+      mi.exposed = (clients[mi.base] == 1);
+  }
+  // Memory-port arrays -> TOP-LEVEL PORTS, not internal storage.
+  //
+  // These used to be an internal Connections::Combinational + AlloMem instance, so the
+  // array's storage lived INSIDE the synthesized design: a region whose boundary arrays
+  // are all random-access produced `module top(clk, rst, done)` with every workload
+  // array turned into registers/RAM in the DUT. That silently inflates every area
+  // number and is not a shape anyone can integrate -- the Vitis/Catapult backend
+  // exposes the same arrays as memory interfaces (`_rsc_radr/_re/_q`, `_rsc_d/_we`).
+  //
+  // So the DUT now only carries the ACCESS PORTS and the memory moves to the testbench
+  // (see the tb, which instantiates AlloMemPins and binds it). The request
+  // encoding, the kernel-side client ports and AlloMem itself are all unchanged -- only
+  // where the memory is instantiated moves. Latency-insensitive Connections rather than
+  // raw RAM pins keeps the existing handshake and imposes no memory-timing assumption.
+  // Ports are named after the ARRAY (`A_req`), not the internal replica key
+  // (`mp0_1_req`) -- an integrator reading the port list should recognise the design's
+  // own names. Safe because only single-client arrays get here, so the name is unique.
   for (auto &mi : memInsts) {
-    std::string reqT =
-        "ac_int<" + std::to_string(1 + mi.addrw + mi.dataw) + ", false>";
-    indent();
-    os << "Connections::Combinational< " << reqT << " > " << mi.chan
-       << "_req_ch;\n";
-    if (mi.dir != 'o') { // 'i' and 'b' read -> need a response channel
-      indent();
-      os << "Connections::Combinational< " << mi.ctype << " > " << mi.chan
-         << "_rsp_ch;\n";
+    if (!mi.exposed)
+      continue;
+    std::string aT = "ac_int<" + std::to_string(mi.addrw) + ", false>";
+    if (mi.dir != 'o') { // read side
+      indent(); os << "sc_out< " << aT << " > " << mi.base << "_radr;\n";
+      indent(); os << "sc_out<bool> " << mi.base << "_re;\n";
+      indent(); os << "sc_in< " << mi.ctype << " > " << mi.base << "_q;\n";
+      indent(); os << "sc_in<bool> " << mi.base << "_rrdy;\n";
     }
+    if (mi.dir != 'i') { // write side
+      indent(); os << "sc_out< " << aT << " > " << mi.base << "_wadr;\n";
+      indent(); os << "sc_out< " << mi.ctype << " > " << mi.base << "_d;\n";
+      indent(); os << "sc_out<bool> " << mi.base << "_we;\n";
+      indent(); os << "sc_in<bool> " << mi.base << "_wrdy;\n";
+    }
+  }
+  // Replicated (multi-client) arrays keep their memory INSIDE the design.
+  for (auto &mi : memInsts) {
+    if (mi.exposed)
+      continue;
+    // Same AlloMemPins the testbench uses for exposed arrays -- only the location
+    // differs. sc_signals stand in for what the Connections channel used to be.
+    std::string aT = "ac_int<" + std::to_string(mi.addrw) + ", false>";
+    indent(); os << "sc_signal< " << aT << " > " << mi.chan << "_radr, " << mi.chan
+                 << "_wadr;\n";
+    indent(); os << "sc_signal<bool> " << mi.chan << "_re, " << mi.chan << "_we, "
+                 << mi.chan << "_rrdy, " << mi.chan << "_wrdy;\n";
+    indent(); os << "sc_signal< " << mi.ctype << " > " << mi.chan << "_q, " << mi.chan
+                 << "_d;\n";
     indent();
-    os << (mi.dir == 'o' ? "AlloMemW< " : "AlloMem< ") << mi.ctype << ", "
-       << mi.total << ", " << mi.addrw << ", " << mi.dataw << " > " << mi.chan
-       << "_mem;\n";
+    os << "AlloMemPins< " << mi.ctype << ", " << mi.total << ", " << mi.addrw
+       << " > " << mi.chan << "_mem;  // replicated across clients: cannot be a port\n";
   }
 
   // Constructor: init list (channel names + instance names) + bindings.
@@ -2354,10 +2646,12 @@ void SystemCModuleEmitter::emitTopModule(func::FuncOp func) {  // new (SystemC-o
     sep = ", ";
   }
   for (auto &mi : memInsts) {
-    os << sep << mi.chan << "_req_ch(\"" << mi.chan << "_req_ch\")";
-    if (mi.dir != 'o')
-      os << ", " << mi.chan << "_rsp_ch(\"" << mi.chan << "_rsp_ch\")";
-    os << ", " << mi.chan << "_mem(\"" << mi.chan << "_mem\")";
+    if (mi.exposed) {
+      // raw sc_in/sc_out: no name argument, nothing to add to the init list
+      continue;
+    } else {
+      os << sep << mi.chan << "_mem(\"" << mi.chan << "_mem\")";
+    }
     sep = ", ";
   }
   os << " {\n";
@@ -2451,17 +2745,40 @@ void SystemCModuleEmitter::emitTopModule(func::FuncOp func) {  // new (SystemC-o
         std::string ca = std::string(getName(carg).str());
         std::string rb = std::string(getName(ov).str());
         if (mp) {
-          // random-access memory port: bind req (+ rsp) to THIS client's own
-          // (replicated) memory channels (mp<call>_<arg>).
+          // random-access memory port: bind req (+ rsp) straight through to THIS
+          // client's TOP-LEVEL port (mp<call>_<arg>). The memory itself is outside
+          // the design now, so there is no internal channel to land on -- the kernel
+          // port and the top port are the same wire.
           std::string chan = "mp" + std::to_string(it.index()) + "_" +
                              std::to_string(opnd.index());
-          indent();
-          os << instNames[it.index()] << "." << ca << "_req(" << chan
-             << "_req_ch);\n";
-          if (mp != 'o') { // 'i' and 'b' bind the response channel too
-            indent();
-            os << instNames[it.index()] << "." << ca << "_rsp(" << chan
-               << "_rsp_ch);\n";
+          // Exposed (single-client) -> bind straight to the top port named after the
+          // array. Replicated -> bind to this replica's internal channel, as before.
+          std::string base;
+          for (auto &mi : memInsts)
+            if (mi.chan == chan && mi.exposed)
+              base = mi.base;
+          std::string inst = instNames[it.index()];
+          if (!base.empty()) {
+            // EXPOSED: the kernel's pins are the top's pins, wired straight through.
+            if (mp != 'o')
+              for (const char *sfx : {"_radr", "_re", "_q", "_rrdy"}) {
+                indent(); os << inst << "." << ca << sfx << "(" << base << sfx << ");\n";
+              }
+            if (mp != 'i')
+              for (const char *sfx : {"_wadr", "_d", "_we", "_wrdy"}) {
+                indent(); os << inst << "." << ca << sfx << "(" << base << sfx << ");\n";
+              }
+          } else {
+            // REPLICATED: same pins, bound to this replica's internal signals rather
+            // than to a top-level port.
+            if (mp != 'o')
+              for (const char *sfx : {"_radr", "_re", "_q", "_rrdy"}) {
+                indent(); os << inst << "." << ca << sfx << "(" << chan << sfx << ");\n";
+              }
+            if (mp != 'i')
+              for (const char *sfx : {"_wadr", "_d", "_we", "_wrdy"}) {
+                indent(); os << inst << "." << ca << sfx << "(" << chan << sfx << ");\n";
+              }
           }
         } else if (streamArgDir(carg)) {
           // sequential-scan boundary -> single stream port
@@ -2515,13 +2832,18 @@ void SystemCModuleEmitter::emitTopModule(func::FuncOp func) {  // new (SystemC-o
       indent(); os << nm << "_fifo.full_o(" << nm << "_full_sig);\n";
     }
   }
-  // Wire each internal memory: clk/rst + req channel (+ rsp channel for reads).
+  // Exposed memories are wired in the TESTBENCH (they are outside the design now).
+  // Replicated ones stay here and are wired as before.
   for (auto &mi : memInsts) {
+    if (mi.exposed)
+      continue;
     indent(); os << mi.chan << "_mem.clk(clk);\n";
     indent(); os << mi.chan << "_mem.rst(rst);\n";
-    indent(); os << mi.chan << "_mem.req(" << mi.chan << "_req_ch);\n";
-    if (mi.dir != 'o') {
-      indent(); os << mi.chan << "_mem.rsp(" << mi.chan << "_rsp_ch);\n";
+    // AlloMemPins has all six pins regardless of direction; an unused side is simply
+    // tied to a signal nobody drives, which is cheaper than a second component.
+    for (const char *sfx : {"_radr", "_re", "_q", "_rrdy", "_wadr", "_d", "_we", "_wrdy"}) {
+      indent();
+      os << mi.chan << "_mem." << (sfx + 1) << "(" << mi.chan << sfx << ");\n";
     }
   }
   // Combinational aggregator: drive the top `done` port from all kernel dones.
@@ -2772,21 +3094,6 @@ template <class T> inline unsigned long long _fbits(const T &v) {
 // Reconstruct a memory element from the DATAW raw bits: value-cast for integers,
 // set_data() bit-load for floats (a value-cast would corrupt the float; memcpy is
 // rejected under synthesis as above).
-template <typename T> inline T _mem_decode(unsigned long long r) { return (T)(long long)r; }
-template <> inline half _mem_decode<half>(unsigned long long r) {
-  half h; h.set_data(ac_int<16, true>((int)(uint16_t)r)); return h;
-}
-template <>
-inline ac_ieee_float<binary32> _mem_decode<ac_ieee_float<binary32> >(unsigned long long r) {
-  ac_ieee_float<binary32> f; f.set_data(ac_int<32, true>((int)(uint32_t)r)); return f;
-}
-template <> inline double _mem_decode<double>(unsigned long long r) {
-#ifdef __SYNTHESIS__
-  return (double)(long long)r;
-#else
-  double d; std::memcpy(&d, &r, sizeof(d)); return d;
-#endif
-}
 // tb: data files hold float text -> read a float and convert.
 inline std::istream &operator>>(std::istream &is, half &h) { float f; is >> f; h = half(f); return is; }
 inline std::istream &operator>>(std::istream &is, ac_ieee_float<binary32> &h) {
@@ -2937,65 +3244,71 @@ template <int W> using ap_int = typename ap_sel<W>::s;
 template <int W> using ap_uint = typename ap_sel<W>::u;
 #endif
 
-// Random-access memory port for a non-sequential boundary array (SystemC/
-// Connections flow — internal memory, the only kind SystemC supports; useref
-// 14.9.1). Request packed into one ac_int: bit0 = opcode (0=LOAD,1=STORE),
-// [ADDRW] addr, [DATAW] wdata. Response = the read value T. One txn/cycle.
-// The kernel is the CLIENT (Out<req>/In<rsp>); this module holds the storage.
-template <typename T, int SIZE, int ADDRW, int DATAW>
-SC_MODULE(AlloMem) {
-  sc_in_clk clk;
-  sc_in<bool> rst;
-  Connections::In< ac_int<1 + ADDRW + DATAW, false> > req;
-  Connections::Out<T> rsp;
-  T mem[SIZE];
-  SC_HAS_PROCESS(AlloMem);
-  AlloMem(sc_module_name n) : sc_module(n), req("req"), rsp("rsp") {
-    SC_THREAD(run);
-    sensitive << clk.pos();
-    async_reset_signal_is(rst, false);
-  }
-  void run() {
-    req.Reset();
-    rsp.Reset();
-    wait();
-    while (1) {
-      ac_int<1 + ADDRW + DATAW, false> r = req.Pop();
-      ac_int<ADDRW, false> a = r.template slc<ADDRW>(1);
-      if (r[0])
-        mem[a] = _mem_decode<T>(r.template slc<DATAW>(1 + ADDRW).to_int64());
-      else
-        rsp.Push(mem[a]);
-      wait();
-    }
-  }
-};
+// A DEFINED zero for any memory element type. `T()` is not usable: ac_ieee_float's
+// default constructor is `{}`, which leaves the payload uninitialised, and a plain
+// literal 0 does not convert (sc_out<ac_ieee_float>::write takes const T& and there is
+// no implicit int->T conversion). Only needed for the reset action; the float cases get
+// an explicit construction from 0.0f.
+template <typename T> inline T _mem_zero() { return (T)0; }
+template <> inline half _mem_zero<half>() { return half(0.0f); }
+template <>
+inline ac_ieee_float<binary32> _mem_zero<ac_ieee_float<binary32> >() {
+  return ac_ieee_float<binary32>(0.0f);
+}
 
-// Write-only random-access memory port for a non-sequential OUTPUT array. Same
-// packed request as AlloMem but STORE-only, so there is NO response port (a
-// store is fire-and-forget; nothing to bind an rsp Out to). The testbench reads
-// mem[] out after the run.  ⚠ the int64 cast makes float wdata lossy (defer).
-template <typename T, int SIZE, int ADDRW, int DATAW>
-SC_MODULE(AlloMemW) {
+// Pin-interface memory: the counterpart of the RAM pins a kernel presents. Used in BOTH
+// places, which is the point -- a kernel cannot tell whether its memory sits inside the
+// design (a replicated, multi-client array) or in the testbench (a single-client array
+// exposed at the boundary). Only the binding differs.
+//
+// Synchronous read: the address is captured on the clock edge and `q` is presented on the
+// NEXT one, which is why the kernel-side _rd() accessor waits twice.
+template <typename T, int SIZE, int ADDRW>
+SC_MODULE(AlloMemPins) {
   sc_in_clk clk;
   sc_in<bool> rst;
-  Connections::In< ac_int<1 + ADDRW + DATAW, false> > req;
+  sc_in< ac_int<ADDRW, false> > radr;
+  sc_in<bool> re;
+  sc_out<T> q;
+  sc_out<bool> rrdy;
+  sc_in< ac_int<ADDRW, false> > wadr;
+  sc_in<T> d;
+  sc_in<bool> we;
+  sc_out<bool> wrdy;
   T mem[SIZE];
-  SC_HAS_PROCESS(AlloMemW);
-  AlloMemW(sc_module_name n) : sc_module(n), req("req") {
+  SC_HAS_PROCESS(AlloMemPins);
+  AlloMemPins(sc_module_name n) : sc_module(n) {
     SC_THREAD(run);
     sensitive << clk.pos();
     async_reset_signal_is(rst, false);
   }
   void run() {
-    req.Reset();
-    for (int z = 0; z < SIZE; z++) // 0-init so unwritten elements sum-merge as 0
-      mem[z] = _mem_decode<T>(0);
+    // NOTE: mem[] is deliberately NOT cleared here -- the testbench preloads it before
+    // reset is released, exactly as it did with AlloMem, and clearing would wipe that.
+    // This memory is ALWAYS READY: single-cycle, unarbitrated, no bank conflicts. The
+    // ready lines exist for the integrator's memory, which may not be -- here they are
+    // simply held high, so the accessors' stall loops fall through in one edge.
+    rrdy.write(true);
+    wrdy.write(true);
+    // `q` is a driven sc_out, so Catapult requires it written in the reset action too
+    // (CIN-233). Only reachable when this memory is INSIDE the design -- a replicated,
+    // multi-client array -- since a testbench-side instance is never synthesized.
+    //
+    // NOT `T()`: ac_ieee_float's default constructor is `{}`, so that would leave the
+    // payload UNINITIALISED and the reset value of a float data pin indeterminate.
+    q.write(_mem_zero<T>());
     wait();
     while (1) {
-      ac_int<1 + ADDRW + DATAW, false> r = req.Pop();
-      ac_int<ADDRW, false> a = r.template slc<ADDRW>(1);
-      mem[a] = _mem_decode<T>(r.template slc<DATAW>(1 + ADDRW).to_int64());
+      // Both accesses are GUARDED BY THEIR ENABLE and bounds-checked. Not defensive
+      // padding: a write-only array leaves `radr` an undriven sc_signal, and reading
+      // mem[] at that uninitialized address indexes out of bounds and segfaults --
+      // which is exactly how this first showed up (mem_port_scatter).
+      unsigned wa = wadr.read().to_uint();
+      if (we.read() && wa < (unsigned)SIZE)
+        mem[wa] = d.read();
+      unsigned ra = radr.read().to_uint();
+      if (re.read() && ra < (unsigned)SIZE)
+        q.write(mem[ra]);
       wait();
     }
   }
@@ -3092,7 +3405,7 @@ struct AlloFifoC : public Connections::Fifo<T, N> {
 
 )XXX";
   if (std::getenv("ALLO_SYNC_RESET")) {
-    // swap the async reset in the module templates (AlloMem/AlloMemW/AlloFifo) to sync
+    // swap the async reset in the module templates (AlloMemPins/AlloFifo) to sync
     std::string dh(device_header);
     for (size_t p; (p = dh.find("async_reset_signal_is")) != std::string::npos;)
       dh.replace(p, /*len("async_reset_signal_is")=*/21, "reset_signal_is");
@@ -3137,17 +3450,61 @@ struct AlloFifoC : public Connections::Fifo<T, N> {
       os << "Connections::Combinational< " << a.ctype << " > ch_" << a.member
          << ";\n";
     }
+    // The random-access memories live HERE, not in the DUT: a boundary array is
+    // storage the design ACCESSES, not storage it CONTAINS. Keeping them inside made
+    // every workload array synthesize into the design (a region whose arrays are all
+    // random-access emitted `module top(clk, rst, done)` with the arrays as registers),
+    // which inflates every area number and is not an integratable interface.
+    for (auto &mi : memInsts) {
+      if (!mi.exposed)
+        continue; // replicated: still inside the DUT
+      std::string aT = "ac_int<" + std::to_string(mi.addrw) + ", false>";
+      indent(); os << "sc_signal< " << aT << " > " << mi.chan << "_radr, " << mi.chan
+                   << "_wadr;\n";
+      indent(); os << "sc_signal<bool> " << mi.chan << "_re, " << mi.chan << "_we, "
+                   << mi.chan << "_rrdy, " << mi.chan << "_wrdy;\n";
+      indent(); os << "sc_signal< " << mi.ctype << " > " << mi.chan << "_q, "
+                   << mi.chan << "_d;\n";
+      indent();
+      os << "AlloMemPins< " << mi.ctype << ", " << mi.total << ", " << mi.addrw
+         << " > " << mi.chan << "_mem;\n";
+    }
     indent(); os << "SC_HAS_PROCESS(tb);\n";
     indent();
     os << "tb(sc_module_name n) : sc_module(n), clk(\"clk\", 1, SC_NS), dut(\"dut\")";
     for (auto &a : ioArrays)
       os << ", ch_" << a.member << "(\"ch_" << a.member << "\")";
+    for (auto &mi : memInsts) {
+      if (!mi.exposed)
+        continue;
+      os << ", " << mi.chan << "_mem(\"" << mi.chan << "_mem\")";
+    }
     os << " {\n";
     addIndent();
     indent(); os << "dut.clk(clk); dut.rst(rst); dut.done(done_sig);\n";
     for (auto &a : ioArrays) {
       indent();
       os << "dut." << a.member << "(ch_" << a.member << ");\n";
+    }
+    // Bind each exposed memory to the DUT's matching port pair, and clock it here.
+    for (auto &mi : memInsts) {
+      if (!mi.exposed)
+        continue;
+      indent();
+      os << mi.chan << "_mem.clk(clk); " << mi.chan << "_mem.rst(rst);\n";
+      // The memory has all six pins and EVERY one must be bound or SystemC rejects
+      // elaboration; the DUT only has the pins for its direction. So always bind the
+      // memory, and bind the DUT side only where that pin exists. An unused side ends
+      // up on a signal nobody drives, which is harmless.
+      for (const char *sfx : {"_radr", "_re", "_q", "_rrdy", "_wadr", "_d", "_we", "_wrdy"}) {
+        // _radr/_re/_q/_rrdy are the read side; _wadr/_d/_we/_wrdy the write side.
+        bool isRead = (sfx[1] == 'r' || sfx[1] == 'q');
+        bool dutHas = isRead ? (mi.dir != 'o') : (mi.dir != 'i');
+        indent();
+        if (dutHas)
+          os << "dut." << mi.base << sfx << "(" << mi.chan << sfx << "); ";
+        os << mi.chan << "_mem." << (sfx + 1) << "(" << mi.chan << sfx << ");\n";
+      }
     }
     indent(); os << "SC_THREAD(src); sensitive << clk.posedge_event(); "
                     "async_reset_signal_is(rst, false);\n";
@@ -3246,9 +3603,11 @@ struct AlloFifoC : public Connections::Fifo<T, N> {
         bool isF = (mi.ctype == "half" || mi.ctype == "double" ||
                     mi.ctype.find("ieee_float") != std::string::npos);
         std::string rt = isF ? mi.ctype : std::string("long long");
+        // Exposed memories live in the tb; replicated ones are still inside the DUT.
+        std::string owner = mi.exposed ? "t." : "t.dut.";
         os << "{ std::ifstream _f(\"input" << mi.inIdx << ".data\"); " << rt
-           << " _v; for (int f = 0; f < " << mi.total << "; ++f) { _f >> _v; t.dut."
-           << mi.chan << "_mem.mem[f] = (" << mi.ctype << ")_v; } }\n";
+           << " _v; for (int f = 0; f < " << mi.total << "; ++f) { _f >> _v; "
+           << owner << mi.chan << "_mem.mem[f] = (" << mi.ctype << ")_v; } }\n";
       }
     indent(); os << "t.rst = 0; sc_start(1, SC_NS);\n";
     // A stream output stops the sim via sc_stop (self-synchronizing: the sink
@@ -3290,11 +3649,13 @@ struct AlloFifoC : public Connections::Fifo<T, N> {
         os << (isFloat ? "    float _s = 0;\n" : "    long long _s = 0;\n");
         for (auto &mi : memInsts)
           if (mi.dir != 'i' && mi.outIdx == m.outIdx) {
+            // Exposed memories live in the tb; replicated ones inside the DUT.
+            std::string owner = mi.exposed ? "t." : "t.dut.";
             indent();
             if (isFloat)
-              os << "    _s += t.dut." << mi.chan << "_mem.mem[f].to_float();\n";
+              os << "    _s += " << owner << mi.chan << "_mem.mem[f].to_float();\n";
             else
-              os << "    _s += (long long) t.dut." << mi.chan
+              os << "    _s += (long long) " << owner << mi.chan
                  << "_mem.mem[f];\n";
           }
         indent();

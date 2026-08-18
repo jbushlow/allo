@@ -229,6 +229,76 @@ def discover_stream_depths(module, top, source):
     return list(zip(channel_names, stream_depths))
 
 
+# Device strings that belong to an FPGA flow, not to Catapult.
+#
+# `configs["device"]` means different things to different backends: for vitis_hls it is an
+# FPGA PART (u280, xcu250-...), for Catapult it is an ASIC STANDARD-CELL LIBRARY
+# (nangate-45nm_beh, sky130). A script that supports both backends typically has one
+# `--device` flag and forwards it to whichever it was asked for, so an FPGA part reaches
+# this flow whenever the systemc/catapult path is taken with the FPGA default still set.
+#
+# The generator below passes any unrecognised device straight through as
+# `solution library add <device>`, so that mistake used to surface only as Catapult's
+#   "Could not locate library file for library name u280 for current configuration"
+# from inside a csyn run -- with nothing pointing at the actual cause. Catch it here.
+#
+# DELIBERATELY A BLACKLIST, NOT A WHITELIST: a custom or site-specific ASIC library is a
+# legitimate value we must keep passing through untouched. Only patterns that can ONLY be
+# an FPGA are rejected.
+_FPGA_DEVICE_PATTERNS = (
+    "u200", "u250", "u280", "u50", "u55",          # AMD/Xilinx Alveo boards
+    "xcu", "xc7", "xcvu", "xczu", "xcku", "xcau",  # Xilinx part prefixes
+    "versal", "zynq", "kintex", "virtex", "artix", "spartan",
+    "arria", "stratix", "cyclone", "agilex",       # Intel/Altera families
+)
+
+
+def _looks_like_fpga(device):
+    d = str(device).lower()
+    return any(p in d for p in _FPGA_DEVICE_PATTERNS)
+
+
+def resolve_library(configs):
+    """Pick the Catapult standard-cell library, from `library` or legacy `device`.
+
+    `library` is the canonical key: what this flow selects IS a library
+    (`solution library add <name>`), and calling it `device` invited exactly the bug
+    this resolves -- one shared `--device` flag meaning an FPGA part to vitis_hls and a
+    cell library here.
+
+    Resolution order, chosen so a script that drives BOTH backends can be fixed by ADDING
+    one key rather than restructuring what it passes:
+
+      1. `library` given            -> use it; any `device` present belongs to the other
+                                       backend and is ignored.
+      2. no `library`, `device` given:
+           - an FPGA part           -> ERROR. Nothing sensible to select, and silently
+                                       defaulting would hand back an area number measured
+                                       against a library the caller never chose.
+           - anything else          -> use it (back-compat, incl. custom ASIC libraries).
+      3. neither                    -> the default.
+    """
+    library = configs.get("library")
+    if library is not None:
+        return library
+    device = configs.get("device")
+    if device is None:
+        return "nangate-45nm_beh"
+    if not _looks_like_fpga(device):
+        return device  # legacy spelling of `library`
+    raise ValueError(
+        f"device={device!r} is an FPGA part, but the Catapult/SystemC flow synthesizes to "
+        f"an ASIC standard-cell library (e.g. 'nangate-45nm_beh' or 'sky130'). Catapult has "
+        f"no such library and would fail later with "
+        f"\"Could not locate library file for library name {device}\".\n"
+        f"If one script drives both backends, the smallest fix is to ADD a 'library' key "
+        f"for this flow -- configs={{'library': 'nangate-45nm_beh', 'device': {device!r}}} "
+        f"-- since 'library' wins and 'device' is then left for target='vitis_hls'. "
+        f"Dropping 'device' from the systemc configs works too (it defaults to "
+        f"'nangate-45nm_beh')."
+    )
+
+
 def codegen_tcl(top, configs):
     """Generate TCL script for Catapult HLS synthesis.
 
@@ -262,7 +332,8 @@ def codegen_tcl(top, configs):
     )
     mode = configs.get("mode", "csyn")
     platform = configs.get("platform", "catapult")
-    device = configs.get("device", "nangate-45nm_beh")
+    # `library` is the canonical key; `device` still accepted (see resolve_library).
+    device = resolve_library(configs)
     # preserve_hier=True keeps sub-function boundaries in RTL output,
     # enabling per-module area/power breakdown in area.rpt.
     preserve_hier = configs.get("preserve_hierarchy", True)

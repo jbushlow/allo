@@ -32,8 +32,9 @@ if __name__ == "__main__":
     code = df.build(top, target="systemc").hls_code
     open("mem_port_reverse.cpp", "w").write(code)
     print("wrote mem_port_reverse.cpp")
-    assert "AlloMem<" in code, "expected an AlloMem instance for reversed-read A"
-    assert "_req.Push(" in code, "expected a LOAD req push in the body"
+    # Memory boundary is RAM PINS now (AlloMemPins + _radr/_re/_q).
+    assert "AlloMemPins<" in code, "expected an AlloMemPins instance for A"
+    assert "_rd(" in code, "expected a modulario _rd() load in the body"
     print("emitted AlloMem + req/resp handshake")
 
     if os.environ.get("MGC_HOME"):
