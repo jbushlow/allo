@@ -41,3 +41,5 @@ Catapult calls currently require `reset_before=true`. This is intentional: the
 observed direct-array top has no separate start/restart port, so reset release
 is the only proven transaction launch event. The generated testbench retains
 the same clock/input/output-delay plusargs used by RTL, FFGL, and BAGL runs.
+Catapult-family synchronous-memory read responses also consume the shared BAGL
+BFM drive delay; it defaults to zero for RTL and FFGL simulation.

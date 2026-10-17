@@ -54,32 +54,36 @@ def construct():
     d = os.path.dirname(os.path.abspath(__file__))
     while True:
       candidate = os.path.join(d, 'allo', 'backend', 'asic')
-      if os.path.isdir(os.path.join(candidate, 'nodes')):
+      if os.path.isdir(os.path.join(candidate, 'nodes', 'legacy-flat-flow')):
         asic_dir = candidate
         break
       parent = os.path.dirname(d)
       if parent == d:
         raise SystemExit(
-          'no allo/backend/asic/nodes in any parent of '
+          'no allo/backend/asic/nodes/legacy-flat-flow in any parent of '
           f'{os.path.dirname(os.path.abspath(__file__))}. Set ALLO_ASIC_FLOW to '
           'a checkout of the flow, or run '
           'allo/backend/asic/tools/preflight.py to see what is missing.')
       d = parent
   nodes_dir = os.path.join(asic_dir, 'nodes')
-  if not os.path.isdir(nodes_dir):
-    raise SystemExit(f'ALLO_ASIC_FLOW={asic_dir} has no nodes/ directory.')
+  legacy_nodes_dir = os.path.join(nodes_dir, 'legacy-flat-flow')
+  if not os.path.isdir(legacy_nodes_dir):
+    raise SystemExit(
+      f'ALLO_ASIC_FLOW={asic_dir} has no nodes/legacy-flat-flow directory.')
 
   graph.sys_path.append(os.path.join(asic_dir, 'adks'))
   graph.set_adk(adk_name)
   adk = graph.get_adk_node()
 
-  node_names = [
-    'sv2v-design-collector',
-    'sram-collateral',
-    'asic-flow-utilities',
-    'synopsys-dc-synthesis',
-  ]
-  nodes = {name: Node(os.path.join(nodes_dir, name)) for name in node_names}
+  node_paths = {
+    'sv2v-design-collector': legacy_nodes_dir,
+    'sram-collateral': nodes_dir,
+    'asic-flow-utilities': nodes_dir,
+    'synopsys-dc-synthesis': legacy_nodes_dir,
+  }
+  nodes = {
+    name: Node(os.path.join(root, name)) for name, root in node_paths.items()
+  }
   for node in nodes.values():
     graph.add_node(node)
 

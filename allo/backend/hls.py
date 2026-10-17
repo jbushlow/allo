@@ -1708,7 +1708,9 @@ class HLSModule:
                             f"{u['latency']} ({u['status']}); see "
                             f"{self.project}/latency.json"
                         )
-
+                if self.mode == "csyn" and self.platform == "systemc":
+                    # ASIC capture is opt-in; emit_final is otherwise a no-op.
+                    asic_manifest.emit_final(self.project, self.configs, "systemc")
                 if self.mode == "ppa":
                     print(
                         f"[{time.strftime('%H:%M:%S', time.gmtime())}] Extracting PPA metrics..."

@@ -47,7 +47,7 @@ parameters:
   drc_check_policy: error
   google_sheets_enabled: false
   google_sheets_required: true
-  google_sheets_credentials: /home/jb2698/.config/gspread/service_account.json
+  google_sheets_credentials: REPLACE_WITH_GOOGLE_SHEETS_CREDENTIALS
   google_spreadsheet_id: REPLACE_WITH_SPREADSHEET_ID
   google_worksheet_name: Results
   google_sheet_columns_file: google-sheet-columns.json

@@ -21,11 +21,13 @@ outputs:
 
 commands:
   - bash run.sh
-  - python3 inputs/cleanup-node.py --node allo-ffgl-sim --output ffgl-cleanup-metrics.json simv simv.daidir csrc DVEfiles ucli.key .vcs.timestamp
+  - python3 inputs/cleanup-node.py --node allo-ffgl-sim --output ffgl-cleanup-metrics.json simv simv.daidir csrc DVEfiles ucli.key .vcs.timestamp ffgl-initreg.config
 
 parameters:
   testbench_name: allo_generated_testbench
   waveform: True
+  ffgl_powerup_mode: random
+  ffgl_powerup_seed: 2
   cleanup_enabled: True
 
 preconditions:
@@ -59,3 +61,9 @@ postconditions:
       assert report['status'] == 'passed'
       assert report['pass_marker_found']
       assert report['vcd_bytes'] > 0
+      assert report['powerup']['mode'] in {'random', 'x', 'zero', 'one'}
+      if report['powerup']['mode'] == 'random':
+          assert isinstance(report['powerup']['seed'], int)
+          assert report['powerup']['seed'] >= 2
+      else:
+          assert report['powerup']['seed'] is None

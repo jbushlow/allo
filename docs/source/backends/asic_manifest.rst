@@ -5,23 +5,22 @@
 The ASIC manifest
 ###################################
 
-``allo/backend/asic`` (see its ``PROVENANCE.md``) has two entry points, and
-they sit on opposite sides of one question.
-
-The **flat flow** consumes a directory of Verilog and an ``sv2v_manifest.f``
-file list, entered at the design collector. It knows nothing about Allo, and
-every ASIC number the fork has published came through it — which is why those
-runs were fed by *committed RTL exports* rather than by the compiler.
-
-**AAAH**, the ``allo-*`` nodes, consumes Allo-level architecture, and **not
-through files**. Its compilation node loads an Allo design and *calls*
+``allo/backend/asic`` (see its ``PROVENANCE.md``) contains the maintained
+hierarchical Allo ASIC flow. Its ``allo-*`` compilation node consumes
+Allo-level architecture, rather than a hand-written hardware manifest: it
+loads an Allo design and *calls*
 ``build(project, target, mode, configs)`` with
 ``configs["asic_manifest"] = {...}``: Allo is asked to emit, as part of
 compilation, the architecture it just compiled. Downstream planners then place
 macros on a grid from PID row/column deltas, weight the wires between them by
-**pre-HLS stream bit width**, and decide which RTL modules are one macro by
-*semantic identity* rather than by name. None of that survives in emitted
-Verilog, so nothing later in the flow can recover it or check it.
+**pre-HLS stream bit width**, and decide which instances may share a macro from
+the realized MLIR and emitted-HLS implementation contract rather than generated
+names. None of the compiler identity survives in emitted Verilog, so nothing
+later in the flow can recover it or check it.
+
+The older flat RTL nodes are archived under ``nodes/legacy-flat-flow/`` for
+historical TinyTPU constructors. They consume emitted RTL and a file list and
+do not participate in the manifest contract documented here.
 
 Until 2026-09-24 this fork did not emit that manifest, which is why the TinyTPU
 runs were routed around the compilation node. :mod:`allo.backend.asic_manifest`
@@ -29,12 +28,12 @@ is the emitter.
 
 .. important::
 
-   Emitting the manifest is not the same as closing the loop. Allo now emits
-   what its own ASIC backend consumes, verified against the consumer and
-   against TinyTPU's known post-HLS structure; **an end-to-end PD run from the
-   specification has not been performed**, and cannot be on a host without a
-   Synopsys DC licence. What still has to be proved is at the bottom of this
-   page.
+   Emitting the manifest is not by itself physical signoff. The fixed 4-by-4
+   Vitis pipe cleaner has now exercised the manifest through licensed HLS,
+   macro hardening, full-chip implementation, functional gate simulation,
+   back-annotated functional simulation, DRC, and LVS. That run validates the
+   integration contract, while its separately reported antenna, SDF-coverage,
+   and BAGL runtime timing-check issues remain open signoff limitations.
 
 
 What is emitted, and when
@@ -42,6 +41,8 @@ What is emitted, and when
 
 Two files, matching what ``nodes/allo-asic-compilation/validate_build.py``
 checks for, each with a ``.tcl`` sibling because the flow's nodes stage both:
+the Tcl sibling assigns the complete same schema to ``allo_asic_manifest``
+using only built-in ``dict`` and ``list`` commands.
 
 ``asic-manifest.json`` — ``stage: "pre_hls"``
     The architecture. Written inside ``allo.dataflow.build()``, from the
@@ -49,14 +50,16 @@ checks for, each with a ``.tcl`` sibling because the flow's nodes stage both:
     runs** — so it exists whether or not a licence does.
 
 ``asic-manifest-final.json`` — ``stage: "post_hls_enriched"``
-    The same records joined to the RTL the backend produced. Written from
+    The same records joined through backend-specific emitted source and
+    synthesis evidence to the RTL hierarchy the backend produced. Written from
     :class:`~allo.backend.hls.HLSModule` once ``csyn`` has succeeded, because
-    only then do the module names exist to join to.
+    only then do the generated process, module, and interface names exist.
 
-``asic-debug/`` holds flat TSV views of the same records, for reading by eye.
+``asic-debug/`` holds flat TSV views plus the exact canonical MLIR, emitted-HLS,
+and RTL strings consumed by the recorded hashes.
 
-Nothing happens unless ``configs["asic_manifest"]["enabled"]`` is set, so the
-ordinary Vitis and Catapult paths are unchanged.
+Nothing happens unless ``configs["asic_manifest"]["enabled"]`` is set, so
+ordinary non-ASIC builds are unchanged.
 
 .. code-block:: python
 
@@ -86,9 +89,10 @@ That ``configs`` dict is not an invention of this page: it is verbatim what
 The schema, as the consumers define it
 ======================================
 
-The schema is not documented anywhere in the flow; it is whatever its readers
-read. The fields below are the ones actually consumed, with the consumer that
-demands each.
+Schema version 2 is emitted by :mod:`allo.backend.asic_manifest`; its validator
+and downstream readers are the normative contract. The fields below summarize
+the fields those consumers require rather than defining a second independent
+schema.
 
 Envelope
 --------
@@ -130,8 +134,11 @@ Envelope
     The flow zips this positionally against the RTL's handshake bundles, so an
     ``m_axi`` memory argument is **not** one of them.
 ``post_hls_records[]``
-    Post-HLS only: ``rtl_root_module``, ``rtl_modules[].name``,
-    ``rtl_equivalence_hash``.
+    Post-HLS only: the emitted-HLS function/interface hash, backend-specific
+    join evidence, synthesis contract, ``rtl_root_module``, dependency closure,
+    realized hierarchy paths, and ``rtl_equivalence_hash``. Vitis records carry
+    process/legalization evidence; SystemC records carry the joined emitted
+    ``SC_MODULE`` and realized Catapult interface evidence.
 
 ``channels[]``
 --------------
@@ -155,7 +162,10 @@ Envelope
 ``macro_class_id``, ``representative`` (must be in ``pe_instances``),
 ``member_count``, ``members[]`` (``semantic_id``, ``rtl_module``,
 ``orientation``), and ``proof.status`` — which must be exactly ``"proven"`` or
-the class is silently dropped.
+the class is silently dropped. ``proof.method`` is
+``specialized_mlir_emitted_hls_contract``. ``rtl_audit.authority`` is false:
+canonical RTL disagreement is reported, while the selected representative
+implementation remains authoritative.
 
 
 What the emitter derives it from
@@ -192,13 +202,22 @@ an ordinal that PE does not have, and a channel with two writers or two
 readers. Each of those is otherwise a ``KeyError``, a ``StopIteration`` or a
 silently misplaced macro several nodes downstream.
 
-Post-HLS, the join walks Vitis's naming: a kernel becomes ``<top>_<instance>``
-(sometimes with a numeric disambiguator — ``dma_ld_0`` becomes
-``tinytpu_isa_dma_ld_0_1``), with ``<root>_...`` children for each pipelined
-loop it split out. Which modules belong to no kernel is decided by *this
-design's* kernel names rather than by a list of vendor module-name patterns:
-an unclaimed module named after one of the design's kernels is the error, and
-everything else is plumbing.
+Post-HLS, the Vitis join parses emitted C++ functions and the Vitis log. Direct
+and legalized clone names are resolved from reported process names; functions
+inlined into a parent are recovered through compiler-generated loop labels.
+The SystemC join parses emitted ``SC_MODULE`` kernels and Catapult's preferred
+self-contained ``concat_rtl.v``, then joins semantic top arguments to the exact
+synchronous-memory pin families realized in RTL. Every Verilog module
+definition and instantiation is parsed once into a common dependency graph,
+from which hardening roots, dependency closures, and realized instance paths
+are derived. Ambiguous HLS processes, SystemC modules, or RTL modules fail
+closed instead of being guessed.
+
+Macro equivalence is proven by a versioned contract containing the specialized
+MLIR contract hash, canonical emitted-HLS behavior and interface, hierarchy
+mode, and synthesis context. A structural RTL fingerprint retains widths,
+constants, operators, connectivity, and child-module types while discarding
+generated spelling; it is diagnostic evidence, not the equivalence authority.
 
 
 Validated against TinyTPU
@@ -233,60 +252,81 @@ expectations from ``TPU.architecture`` rather than hard-coding them, and loads
 rather than asserted.
 
 
+Validated in the Vitis pipe cleaner
+===================================
+
+The October 6, 2026 fixed 4-by-4 pipe cleaner is the first retained real Vitis
+artifact to traverse the complete integrated flow. Its final manifest reports:
+
+* schema version 2 and ``stage: "post_hls_enriched"``;
+* 19 PE instances and 19 matched post-HLS records;
+* zero unmatched/ambiguous and zero unjoined post-HLS records;
+* seven proven implementation classes; and
+* 119 parsed RTL module definitions with roots, dependencies, and realized
+  instance paths.
+
+The manifest was consumed by workload/testbench generation, RTL normalization,
+macro planning and hardening, macro publication, full-chip assembly,
+synthesis, and PNR. FFGL passed. BAGL reached ``ALLO_TEST_PASS`` with no DUT
+unknowns and complete top plus 14/14 macro SDF annotation, but its strict
+status remains failed because VCS reported 45 runtime setup/hold violations.
+Innovus reported zero connectivity/DRC violations and clean setup/hold
+signoff; Calibre reported zero non-antenna DRC results and correct LVS. The
+remaining antenna, SDF-warning, and BAGL timing-simulation issues are not
+waived by this integration result.
+
+
+Validated in the SystemC/Catapult example
+==========================================
+
+The October 7, 2026 SystemC/Catapult run exercised the supported
+``target="systemc"`` path through Catapult synthesis and the same hierarchical
+ASIC consumers. The final manifest joined emitted ``SC_MODULE`` kernels to the
+self-contained ``concat_rtl.v``, recorded synchronous-memory top-interface
+families, parsed dependency closures, and drove macro planning, hardening,
+full-chip assembly, FFGL, BAGL, DRC, LVS, activity extraction, and power. Both
+gate-level simulations passed, all 15 macro instances received SDF in BAGL,
+and LVS was correct.
+
+The direct ``target="catapult"`` backend is not part of this supported path.
+Catapult is the synthesis engine for SystemC/Connections input, and its
+artifact parsing remains isolated behind the common manifest API.
+
+
 What is *not* emitted
 =====================
 
-**Per-argument Catapult RTL protocol capture.** ``allo-testbench-generation``
-wants ``catapult_argument``, ``data_ports``/``triosy_ports``, ``packing`` and
-``interface.roles`` on the ``catapult``/``systemc`` path. Those are a parse of
-Catapult's generated RTL, not an architectural fact, and they belong to a
-separate post-HLS extractor. The Vitis path — the one every TinyTPU ASIC number
-came from — is complete; the post-HLS join is hooked only to Vitis ``csyn``
-for the same reason, because emitting a wrong join would be worse than
-emitting none.
+**Unsupported direct-Catapult evidence.** The supported Catapult-family path is
+SystemC/Connections emission followed by Catapult synthesis. The separate
+direct ``target="catapult"`` compatibility backend is not qualified for this
+ASIC flow and has no parity requirement. Older direct-backend subfunction
+discovery and ``FIFO_DEPTH`` constraint generation are not part of the
+SystemC manifest contract.
 
 **Arithmetic.** A composed region declares what a unit is wired to and never
 what it computes, so the manifest carries no compute ports. That is the Action
 layer's to add (:doc:`/developer/actions`).
 
-**Macro reuse, on the Vitis path.** Each of TinyTPU's 38 PEs hashes to its own
-macro class, so ``member_count`` is 1 everywhere. This is not a defect in the
-hashing: Vitis specializes every instance, and two interior PEs that are the
-same hardware are emitted with *different port orders*, which
-``plan_macros.validate_and_map_ports`` correctly refuses to call equivalent.
-Macro planning at the default ``min_macro_reuse=2`` would therefore find no
-class to harden. Getting reuse back is a question about how the design is
-emitted, not about the manifest.
+Current validation boundary
+===========================
 
+The real Vitis and SystemC/Catapult runs close the former “consumer accepts a
+fixture but no physical run exists” gap. Remaining work should be described
+precisely:
 
-What a licensed host would still have to prove
-==============================================
+* optionally compare the integrated manifest field by field with a
+  representative result from the standalone ``allo-asic`` extraction and
+  record hierarchy-parser runtime; this is a nonblocking parity/performance
+  audit, not a missing integrated consumer;
+* investigate the deferred antenna results, SDF annotation-coverage warnings,
+  and BAGL runtime timing checks before calling the physical result signoff
+  clean;
+* retain fail-closed joins for future Vitis and SystemC naming patterns: a new
+  ambiguous or unmatched process/module must increment the summary counters
+  and stop the compilation node rather than be guessed; and
+* keep direct ``target="catapult"`` outside the supported ASIC contract unless
+  it independently receives backend enrichment and end-to-end qualification.
 
-Success here is that the consumer accepts the manifest. It is **not** a PD run.
-On a host with Vitis HLS *and* a Synopsys DC licence, the path from
-specification to PPA would have to show, in order:
-
-#. ``run_design.py`` → ``validate_build.py`` passing on a real ``csyn``: the
-   four manifest files present, both stages correct, both summary counters 0,
-   and the frozen workload's interface matching ``top_arguments``. Everything
-   but the ``csyn`` is exercised offline today.
-#. ``sv2v-rtl-allo`` and ``allo-asic-macro-plan`` running on that manifest.
-   This is where the reuse ceiling above bites first, and where the failure
-   would be ``no proven macro classes meet reuse threshold`` rather than
-   anything about the manifest's shape.
-#. ``allo-asic-assembly-plan`` → ``allo-asic-physical-intent`` →
-   ``allo-asic-rtl-assembly``, which additionally require every
-   ``stable_instance_name`` to survive into the synthesized netlist, and the
-   ``macro-link.rpt`` count to match ``elaborated_macro_instance_count``.
-#. A DC run that does **not** dissolve the boundaries. At the flattening effort
-   the published runs use, synthesis flattens the hierarchy again unless told
-   otherwise — and changing that makes new numbers non-comparable with the four
-   already published. The manifest buys planning and attribution; it does not
-   by itself buy a hierarchy-preserving netlist.
-
-What could still be wrong at that point, honestly: the Catapult/SystemC
-per-argument capture is absent, so those two backends cannot reach the
-testbench node; the post-HLS join is validated against one design's naming and
-a second design could exercise a Vitis renaming this walk does not cover (the
-counters would say so rather than the join guessing); and ``top_interface`` on
-the non-Vitis paths is a documented default rather than an observation.
+The manifest proves planning identity and representative substitution. It does
+not waive downstream synthesis-boundary checks, physical verification, or
+timing-aware simulation criteria.

@@ -1,16 +1,27 @@
 # Allo back-annotated gate-level simulation
 
 This node runs the generated self-checking Allo testbench against the
-post-route VCS netlist with required SDF annotation, `xprop=tmerge`, negative
-timing-check support, and a VCD suitable for PrimeTime PX. It annotates both the
-recomputed top-level SDF and every hardened-macro SDF using exact instance names
-from `macro-collateral.json`; `sdf-annotation-manifest.json` records that mapping.
+post-route VCS netlist with required SDF annotation, negative timing-check
+support, and a VCD suitable for PrimeTime PX. By default,
+`bagl_powerup_mode=random` initializes sequential state beneath the DUT to
+random binary values while leaving testbench state untouched. Set
+`bagl_powerup_seed` to a reproducible integer of at least 2; VCS reserves 0 and
+1 for uniform initialization. The alternate `x` mode preserves strict
+four-state startup and enables `xprop=tmerge`; `zero` and `one` are diagnostic
+corner modes. VCS does not support `initreg` and X propagation together, so the
+node selects exactly one strategy per run. The selected mode and seed are
+recorded in `simulation-report.json`.
+
+The node annotates both the recomputed top-level SDF and every hardened-macro
+SDF using exact instance names from `macro-collateral.json`;
+`sdf-annotation-manifest.json` records that mapping.
 
 Clock source latency is extracted from `design.pt.sdc`. The testbench contract
 supplies the common flow clock period, and BAGL validates it against the node
-parameter. AXI memory-BFM outputs are driven after one half period plus the
-propagated-clock compensation and input margin, keeping them stable before the
-next active edge. Reset, input, and output margins remain configurable. The JSON report separates top
+parameter. Vitis AXI BFM outputs and Catapult-family synchronous-memory read
+data are driven after one half period plus the propagated-clock compensation
+and input margin, keeping them stable before the next active edge. Reset,
+input, and output margins remain configurable. The JSON report separates top
 and macro annotation coverage, timing violations, unknown DUT behavior, and SDF
 warning categories. Category policies can promote unmatched timing checks,
 unmatched IOPATHs, or ignored up-hierarchy interconnect warnings independently.

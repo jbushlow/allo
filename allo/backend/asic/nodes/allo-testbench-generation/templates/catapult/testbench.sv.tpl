@@ -3,6 +3,7 @@
 module allo_generated_testbench;
 @SIGNAL_DECLARATIONS@
   real allo_bagl_clock_compensation_ns;
+  real allo_bagl_bfm_drive_delay_ns;
   real allo_bagl_input_delay_ns;
   real allo_bagl_output_delay_ns;
   integer allo_bagl_num_reset_cycles;
@@ -12,6 +13,8 @@ module allo_generated_testbench;
   initial begin
     if (!$value$plusargs("ALLO_BAGL_CLK_INS_SRC_LAT_NS=%f", allo_bagl_clock_compensation_ns))
       allo_bagl_clock_compensation_ns = 0.0;
+    if (!$value$plusargs("ALLO_BAGL_BFM_DRIVE_DELAY_NS=%f", allo_bagl_bfm_drive_delay_ns))
+      allo_bagl_bfm_drive_delay_ns = 0.0;
     if (!$value$plusargs("ALLO_BAGL_INPUT_DELAY_NS=%f", allo_bagl_input_delay_ns))
       allo_bagl_input_delay_ns = 0.0;
     if (!$value$plusargs("ALLO_BAGL_OUTPUT_DELAY_NS=%f", allo_bagl_output_delay_ns))

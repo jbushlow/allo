@@ -1,5 +1,11 @@
 # ASIC evaluation handoff — state at the credit limit
 
+> Historical handoff: the flat RTL nodes referenced below now live under
+> `allo/backend/asic/nodes/legacy-flat-flow/`. The maintained hierarchical Allo
+> flow and current examples are documented in `allo/backend/asic/README.md`.
+> GcdUnit and other old design-retention plans below describe the original
+> vendoring decision, not the current tree.
+
 Written because a chat channel is not durable and a result that exists only in
 a message can be lost. Anyone picking this up — a synthesis session, a later
 agent, or me after a reset — should be able to continue from this file alone.

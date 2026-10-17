@@ -2202,6 +2202,52 @@ class ASTTransformer(ASTBuilder):
                                     new_ctx, new_node
                                 )
                                 func_op.attributes["df.kernel"] = UnitAttr.get()
+                                func_op.attributes["df.kernel_name"] = StringAttr.get(
+                                    orig_name
+                                )
+                                func_op.attributes["df.pid"] = StringAttr.get(
+                                    ",".join(map(str, dim))
+                                )
+                                func_op.attributes["df.mapping"] = StringAttr.get(
+                                    ",".join(map(str, mapping))
+                                )
+                                generalized_axes = getattr(
+                                    new_node, "pid_generalized_axes", []
+                                )
+                                if generalized_axes:
+                                    func_op.attributes[
+                                        "df.pid_generalization_policy"
+                                    ] = StringAttr.get(
+                                        new_node.pid_generalization_policy
+                                    )
+                                    func_op.attributes["df.pid_generalized_axes"] = (
+                                        StringAttr.get(
+                                            ",".join(map(str, generalized_axes))
+                                        )
+                                    )
+                                suffix = getattr(ctx, "func_suffix", "")
+                                if suffix:
+                                    func_op.attributes["df.specialization_suffix"] = (
+                                        StringAttr.get(suffix)
+                                    )
+                                if ctx.capture_dataflow_audit:
+                                    predicate = ctx.func_predicate_tags[orig_name][dim]
+                                    if predicate != ("True", []):
+                                        func_op.attributes["df.predicate_tag"] = (
+                                            StringAttr.get(str(freeze_list(predicate)))
+                                        )
+                                    branch_trace = ctx.func_selected_branch_traces.get(
+                                        orig_name, {}
+                                    ).get(dim, [])
+                                    if branch_trace:
+                                        func_op.attributes[
+                                            "df.selected_branch_trace"
+                                        ] = StringAttr.get(str(branch_trace))
+                                # A suffix identifies a kernel nested below the top region.
+                                if suffix:
+                                    func_op.attributes["df.parent_region"] = (
+                                        StringAttr.get(old_ctx.top_func.name.value)
+                                    )
                                 # Mark kernels inside sub-regions so they aren't called from top
                                 if hasattr(ctx, "func_suffix"):
                                     func_op.attributes["df.nested_kernel"] = (
@@ -2361,6 +2407,19 @@ class ASTTransformer(ASTBuilder):
                                     arg_values = []
                                 # Insert calls
                                 for dim in np.ndindex(*mapping):
+                                    instance_args = list(arg_values)
+                                    for axis, width in zip(
+                                        getattr(stmt, "pid_generalized_axes", []),
+                                        getattr(stmt, "pid_generalized_widths", []),
+                                    ):
+                                        pid_type = IntegerType.get_unsigned(width)
+                                        instance_args.append(
+                                            arith_d.ConstantOp(
+                                                pid_type,
+                                                IntegerAttr.get(pid_type, dim[axis]),
+                                                ip=ctx.get_ip(),
+                                            ).result
+                                        )
                                     # Use stored kernel name from ctx (set during kernel definition)
                                     # This ensures call uses the exact same name as definition
                                     key = (stmt.name, dim)
@@ -2386,7 +2445,7 @@ class ASTTransformer(ASTBuilder):
                                     func_d.CallOp(
                                         [],
                                         FlatSymbolRefAttr.get(kernel_name),
-                                        arg_values,
+                                        instance_args,
                                         ip=ctx.get_ip(),
                                     )
 

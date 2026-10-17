@@ -1,5 +1,9 @@
 # Repository layout: designs, tools, core
 
+> Historical layout record: the flat RTL node set discussed below is now
+> isolated under `allo/backend/asic/nodes/legacy-flat-flow/`; maintained
+> hierarchical nodes remain direct children of `allo/backend/asic/nodes/`.
+
 Decision 2026-09-24: the fork will host several accelerator designs — TinyTPU,
 MiniTPU, EVA — and several flows — Vitis HLS, the ASIC/PD flow, the SystemC
 emitter, the ACT mapping compiler, the CHIA agentic loop. The layout must match

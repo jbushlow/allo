@@ -13,6 +13,11 @@ CATEGORY_CODES = {
 }
 
 
+def powerup_record(mode, seed):
+    """Return the normalized power-up metadata stored in the report."""
+    return {"mode": mode, "seed": seed if mode == "random" else None}
+
+
 def warning_codes(text):
     # Count the VCS warning header once, not both its header and explanatory line.
     return re.findall(r"(?im)^Warning-\[([A-Z0-9_-]*SDF[A-Z0-9_-]*|SDF[A-Z0-9_-]+)\]", text)
@@ -30,6 +35,10 @@ def main():
     parser.add_argument("--annotation-manifest", type=Path, required=True)
     parser.add_argument("--sdf-requested", action="store_true")
     parser.add_argument("--macro-model-count", type=int, required=True)
+    parser.add_argument(
+        "--powerup-mode", choices=("random", "x", "zero", "one"), required=True
+    )
+    parser.add_argument("--powerup-seed", type=int, required=True)
     parser.add_argument("--output", type=Path, required=True)
     args = parser.parse_args()
     compile_text = args.compile_log.read_text(errors="replace")
@@ -102,6 +111,7 @@ def main():
         "status": "passed" if passed else "failed",
         "pass_marker_found": pass_marker,
         "vcd_bytes": vcd_bytes,
+        "powerup": powerup_record(args.powerup_mode, args.powerup_seed),
         "sdf_requested": args.sdf_requested,
         "sdf_error_count": len(sdf_errors),
         "sdf_warning_count": len(codes),
