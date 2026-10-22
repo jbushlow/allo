@@ -9,6 +9,8 @@ set -euo pipefail
 : "${sdf_unmatched_timingcheck_policy:=report}"
 : "${sdf_unmatched_iopath_policy:=report}"
 : "${sdf_uphier_interconnect_policy:=report}"
+: "${bagl_powerup_mode:=random}"
+: "${bagl_powerup_seed:=2}"
 
 case "$sdf_corner" in typ|min|max) ;; *) echo "invalid sdf_corner: $sdf_corner" >&2; exit 2;; esac
 case "$sdf_warning_policy" in report|error) ;; *) echo "invalid sdf_warning_policy: $sdf_warning_policy" >&2; exit 2;; esac
@@ -16,6 +18,23 @@ for policy in "$sdf_unmatched_timingcheck_policy" "$sdf_unmatched_iopath_policy"
               "$sdf_uphier_interconnect_policy"; do
   case "$policy" in report|error) ;; *) echo "invalid SDF category policy: $policy" >&2; exit 2;; esac
 done
+case "$bagl_powerup_mode" in
+  random|x|zero|one) ;;
+  *)
+    echo "unsupported BAGL power-up mode: $bagl_powerup_mode" >&2
+    echo "supported modes: random, x, zero, one" >&2
+    exit 2
+    ;;
+esac
+if ! [[ "$bagl_powerup_seed" =~ ^[0-9]+$ ]]; then
+  echo "BAGL power-up seed must be a nonnegative integer" >&2
+  exit 2
+fi
+if [[ "$bagl_powerup_mode" == "random" ]] \
+  && (( 10#$bagl_powerup_seed < 2 )); then
+  echo "random BAGL power-up seed must be at least 2; VCS reserves 0 and 1" >&2
+  exit 2
+fi
 
 mkdir -p outputs
 rm -f outputs/run.vcd outputs/compile.log outputs/simulation.log \
@@ -43,9 +62,10 @@ if [[ -d inputs/macro-registry ]]; then
       ! -name '*.lvs.v' ! -name '*.pg.v' -print0 | sort -z)
 fi
 sources+=(inputs/design.vcs.v)
+# Some vendor Python launchers print environment warnings to stdout first.
 backend=$(python3 -c \
   'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], sys.argv[3]))' \
-  inputs/testbench-contract.json backend vitis)
+  inputs/testbench-contract.json backend vitis | tail -n 1)
 case "$backend" in
   vitis)
     sources+=(
@@ -64,14 +84,35 @@ while IFS=$'\t' read -r scope sdf_file; do
   sdf_args+=(-sdf "$sdf_corner:$scope:$sdf_file")
 done < outputs/sdf-annotations.tsv
 
-vcs -full64 -sverilog -xprop=tmerge -override_timescale=1ns/1ps \
+compile_args=()
+run_args=()
+case "$bagl_powerup_mode" in
+  x)
+    # VCS X-propagation is mutually exclusive with initreg.
+    compile_args+=("-xprop=tmerge")
+    ;;
+  random|zero|one)
+    initreg_value="$bagl_powerup_mode"
+    [[ "$initreg_value" == "zero" ]] && initreg_value=0
+    [[ "$initreg_value" == "one" ]] && initreg_value=1
+    # Scope initialization to the DUT so time-zero testbench state is untouched.
+    printf 'tree %s.%s 0 %s\n' \
+      "$testbench_name" "$dut_name" "$initreg_value" > bagl-initreg.config
+    compile_args+=("+vcs+initreg+config+bagl-initreg.config")
+    run_args+=("+vcs+initreg+config+bagl-initreg.config")
+    if [[ "$bagl_powerup_mode" == "random" ]]; then
+      run_args+=("+vcs+initreg+$bagl_powerup_seed")
+    fi
+    ;;
+esac
+
+vcs -full64 -sverilog "${compile_args[@]}" -override_timescale=1ns/1ps \
   -debug_access+all \
   -top "$testbench_name" +neg_tchk +no_notifier +sdfverbose \
   +define+NTC +define+TETRAMAX \
   "${sdf_args[@]}" \
   -o simv "${sources[@]}" 2>&1 | tee outputs/compile.log
 
-run_args=()
 if [[ "$waveform" == "True" ]]; then
   run_args+=("+ALLO_DUMP_VCD")
 fi
@@ -92,4 +133,6 @@ python3 report_sim.py --compile-log outputs/compile.log \
   --uphier-interconnect-policy "$sdf_uphier_interconnect_policy" \
   --annotation-manifest outputs/sdf-annotation-manifest.json \
   --sdf-requested --macro-model-count "$macro_model_count" \
+  --powerup-mode "$bagl_powerup_mode" \
+  --powerup-seed "$bagl_powerup_seed" \
   --output outputs/simulation-report.json

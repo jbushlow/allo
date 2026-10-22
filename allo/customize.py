@@ -59,6 +59,8 @@ from .ir.visitor import ASTContext
 from .ir.utils import MockArg, MockBuffer, parse_ast, get_global_vars
 from .ir.builder import ASTTransformer
 from .ir.infer import TypeInferer
+from .ir.pid_generalization import generalize_pid_uses
+from .ir.types import UInt
 from .ir.transform import (
     get_affine_loop_nests,
     find_loop_in_bands,
@@ -1571,6 +1573,8 @@ def customize(
     context: Context = None,
     typing_rule_set: str = "default",
     unroll: bool = True,
+    capture_dataflow_audit: bool = False,
+    pid_generalization_policy: str = None,
 ) -> Schedule:
     """
     Args:
@@ -1579,6 +1583,10 @@ def customize(
             Currently supported values include `"default"`, which is primarily intended for HLS backends, and
             `"cpp-style"`, which follows C++-like typing rules and is used for the AIE backend.
             Defaults to `"default"`.
+        - capture_dataflow_audit (bool): Attach optional per-instance audit
+            evidence for ASIC manifest generation.
+        - pid_generalization_policy (str): Replace supported PID data uses with
+            runtime PE arguments while retaining structural specialization.
     """
     # Get Python AST
     file_name = None if isinstance(fn, str) else inspect.getfile(fn)
@@ -1587,6 +1595,11 @@ def customize(
         instantiate = []
     if global_vars is None:
         global_vars = get_global_vars(fn)
+    else:
+        global_vars = global_vars.copy()
+    global_vars.setdefault("UInt", UInt)
+    if pid_generalization_policy is not None:
+        tree = generalize_pid_uses(tree, global_vars, pid_generalization_policy)
     # Type construction
     ctx_type_inf = ASTContext(
         tree=tree,
@@ -1597,6 +1610,7 @@ def customize(
         enable_tensor=enable_tensor,
         typing_rule_set=typing_rule_set,
         verbose=verbose,
+        capture_dataflow_audit=capture_dataflow_audit,
     )
     top_py_globals = (
         inspect.unwrap(fn).__globals__ if isinstance(fn, Callable) else None
@@ -1627,10 +1641,12 @@ def customize(
         mlir_ctx=Context() if context is None else context,
         inst=instantiate,
         func_predicate_tags=ctx_type_inf.func_predicate_tags,
+        func_selected_branch_traces=ctx_type_inf.func_selected_branch_traces,
         unroll=unroll,
         meta_fors_to_unroll=ctx_type_inf.meta_fors_to_unroll,
         enable_tensor=enable_tensor,
         verbose=verbose,
+        capture_dataflow_audit=capture_dataflow_audit,
     )
     ctx.top_py_globals = top_py_globals
     try:

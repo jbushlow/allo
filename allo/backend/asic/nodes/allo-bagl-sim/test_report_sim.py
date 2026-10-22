@@ -17,3 +17,9 @@ Warning-[SDFCOM_TANE] Cannot match timing check
 """
     codes = REPORT.warning_codes(text)
     assert codes == ["SDFCOM_TANE", "SDFCOM_IANE", "SDFCOM_UHICD", "SDFCOM_TANE"]
+
+
+def test_powerup_record_keeps_only_a_random_seed():
+    assert REPORT.powerup_record("random", 17) == {"mode": "random", "seed": 17}
+    for mode in ("x", "zero", "one"):
+        assert REPORT.powerup_record(mode, 17) == {"mode": mode, "seed": None}

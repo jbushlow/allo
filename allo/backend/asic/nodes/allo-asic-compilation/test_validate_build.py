@@ -74,12 +74,12 @@ def test_validate_workload_interface_rejects_input_as_expected(tmp_path: Path):
         validate_workload_interface(final, workload, vectors)
 
 
-def test_validate_workload_interface_accepts_catapult_memory(tmp_path: Path):
+def test_validate_workload_interface_accepts_systemc_memory(tmp_path: Path):
     final, workload, vectors = _contract(tmp_path)
     for argument in final["top_arguments"]:
         argument["interface_protocol"] = (
-            "catapult_sync_memory_read" if argument["name"] == "a"
-            else "catapult_sync_memory_write"
+            "systemc_sync_memory_read" if argument["name"] == "a"
+            else "systemc_sync_memory_write"
         )
         argument["semantic_direction"] = argument["rtl_direction"]
         argument["packing"] = None
@@ -94,7 +94,7 @@ def test_validate_workload_interface_rejects_insufficient_memory_address_width(t
     final, workload, vectors = _contract(tmp_path)
     argument = final["top_arguments"][0]
     argument.update({
-        "interface_protocol": "catapult_sync_memory_read",
+        "interface_protocol": "systemc_sync_memory_read",
         "packing": None,
         "interface": {
             "element_bits": 16, "data_width": 16,

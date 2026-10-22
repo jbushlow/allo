@@ -149,10 +149,11 @@ attribute. See `dev/records/tinytpu/gemmini_rtl/README.md` and
 ## Reproducing
 
 The flow is vendored at `allo/backend/asic/`, and `construct-commercial.py`
-here is the design: it resolves `nodes/` and `adks/` from the repository root
-by its own location, so a clean checkout is enough (override with
-`ALLO_ASIC_FLOW`). Running it still needs DC and mflowgen, which live on
-zhang-21.
+here is the design. It resolves shared SRAM/utility nodes from `nodes/`, the
+flat-only collector and synthesis nodes from `nodes/legacy-flat-flow/`, and the
+ADK from `adks/`. It finds that flow from its own location, so a clean checkout
+is enough (override with `ALLO_ASIC_FLOW`). Running it still needs DC and
+mflowgen, which live on zhang-21.
 
 **Check first, it costs seconds:**
 

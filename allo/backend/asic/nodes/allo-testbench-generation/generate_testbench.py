@@ -620,7 +620,9 @@ def _catapult_memory_model(mapping, clock, reset, reset_asserted=1):
             f'        $fatal(1, "Catapult memory {mapping["semantic_name"]} read address is unknown after reset");',
             f"      if ({address} >= {count})",
             f'        $fatal(1, "Catapult memory {mapping["semantic_name"]} read address out of range: %0d", {address});',
-            f"      {data} <= memory_{ident}[{address}];",
+            "      // Avoid the propagated BAGL clock edge; zero delay in RTL/FFGL.",
+            f"      {data} <= #(allo_bagl_bfm_drive_delay_ns) "
+            f"memory_{ident}[{address}];",
             "    end",
             "  end",
         ]

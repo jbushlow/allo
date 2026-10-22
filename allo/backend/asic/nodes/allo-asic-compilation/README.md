@@ -7,12 +7,22 @@ entrypoint with:
 build(project, target, mode, configs)
 ```
 
-The `vitis`, `catapult`, and `systemc` backends are supported. Backend selection is handled by
-explicit branches in `backend.py`; later backends can add their own target,
-configuration, tool checks, artifact discovery, and validation without adding
-backend-specific path parameters to the graph. The node currently runs Vitis C
-synthesis, validates the enriched ASIC manifest, and publishes the complete
-Allo project, debug artifacts, manifests, and synthesis RTL.
+The node has explicit `vitis`, `catapult`, and `systemc` compilation branches.
+The supported new Catapult pathway is `backend=systemc`: Allo emits SystemC
+with Connections channels, Catapult is the synthesis engine, and the stable RTL
+handoff is `concat_rtl.v`. The direct `catapult` branch is retained as existing
+compatibility code; extending that pure-Catapult path is outside the current
+integration scope. Backend selection is handled in `backend.py`; later backends
+can add their own target, configuration, tool checks, artifact discovery, and
+validation without adding backend-specific path parameters to the graph. The
+complete integrated manifest contract is validated end to end for both Vitis
+and the supported SystemC-to-Catapult path. Each branch runs synthesis,
+validates its backend-specific evidence in the common enriched ASIC manifest,
+and publishes the complete Allo project, debug artifacts, manifests, and
+synthesis RTL.
+
+The current SystemC-to-Catapult qualification status and ordered remaining work
+are recorded in `../../SYSTEMC_CATAPULT_NOTES.md`.
 
 Important parameters are:
 
@@ -48,6 +58,21 @@ serialized as one hexadecimal element per line. This means downstream
 testbench generation does not receive design-only parameters such as array
 size, FIFO depth, or dtype—it consumes the realized workload and HLS outputs.
 
+`python_bin` and `allo_setup_script` are node parameters, not hidden global
+settings. Maintained constructors resolve the host-facing `ALLO_PYTHON` and
+`ALLO_SETUP_SCRIPT` environment variables, validate those paths, and pass the
+resolved values into these two parameters. For example:
+
+```bash
+export ALLO_PYTHON=/home/user/.conda/envs/allo/bin/python
+export ALLO_SETUP_SCRIPT=/work/shared/common/allo/setup-llvm-main.sh
+```
+
+The generated build records the resolved parameter values in its mflowgen
+configuration. Running inside the Allo checkout does not implicitly select the
+correct interpreter or LLVM setup, and generated builds should remain outside
+the `allo/` package directory.
+
 The success marker is written only after the pre-HLS/final manifests, zero
 unmatched joins, debug directory, synthesized Verilog, and frozen workload
 interface have all been validated. Catapult publishes a compact RTL contract:
@@ -56,6 +81,15 @@ SCVerify protocol sources. SystemC synthesis uses Catapult from the project's
 `build/` subdirectory and publishes the same stable filename, normalizing
 `rtl.v` to `concat_rtl.v` when necessary. The complete project remains available under
 `allo-build` but is not duplicated into `backend-rtl`.
+
+For both supported paths, the final manifest is produced by the same
+`allo.backend.asic_manifest` API as the pre-HLS manifest. Vitis joins explicit
+compiler PE identity to emitted-HLS behavior, synthesis context, process names,
+and parsed RTL hierarchy. SystemC joins emitted `SC_MODULE` kernels and exact
+memory-pin protocols to Catapult's self-contained RTL. Specialized MLIR plus
+emitted HLS remains the macro-equivalence authority; canonical RTL is retained
+as an audit. Optional debug output contains the exact canonical MLIR, HLS, and
+RTL strings used by the recorded hashes.
 
 This mflowgen version does not expand node parameters inside assertion text.
 Parameterized environment checks therefore run in `preflight.py`, invoked as

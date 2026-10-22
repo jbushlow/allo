@@ -8,3 +8,5 @@ srams:
     num_banks: <fill in if using SRAMs>
     words_per_row: <fill in if using SRAMs>
     write_size: <fill in if using SRAMs>
+
+# delete this file if not using SRAMs

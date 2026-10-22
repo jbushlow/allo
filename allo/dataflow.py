@@ -17,9 +17,10 @@ from ._mlir.ir import (
     StringAttr,
     FunctionType,
     MemRefType,
+    IntegerAttr,
     Type,
 )
-from ._mlir.dialects import func as func_d, allo as allo_d, memref as memref_d
+from ._mlir.dialects import func as func_d, allo as allo_d, memref as memref_d, arith as arith_d
 from ._mlir.passmanager import PassManager as mlir_pass_manager
 from .customize import customize as _customize, Schedule
 from .utils import parse_kernel_name, construct_kernel_name
@@ -91,6 +92,13 @@ _LINK_PUT_OPS = (
     allo_d.ChannelPutOp,
     allo_d.ChannelTryPutOp,
 )
+
+
+def _copy_dataflow_attributes(source, target):
+    """Preserve dataflow identity while rebuilding a function interface."""
+    for name in source.attributes:
+        if name == "tag" or name.startswith("df."):
+            target.attributes[name] = source.attributes[name]
 
 
 # pylint: disable=eval-used, bad-builtin, too-many-branches, too-many-nested-blocks
@@ -314,12 +322,7 @@ def move_stream_to_interface(
                 new_func.attributes["otypes"] = func.attributes["otypes"]
             # tag stream types
             new_func.attributes["stypes"] = StringAttr.get(s_type_str)
-            if "df.kernel" in func.attributes:
-                new_func.attributes["df.kernel"] = UnitAttr.get()
-            if "tag" in func.attributes:
-                new_func.attributes["tag"] = StringAttr.get(
-                    func.attributes["tag"].value
-                )
+            _copy_dataflow_attributes(func, new_func)
             # move operations from old func to new func
             cnt_stream = 0
             for op in func.entry_block.operations:
@@ -427,14 +430,7 @@ def move_stream_to_interface(
                 new_func.attributes["otypes"] = func.attributes["otypes"]
             # tag stream types
             new_func.attributes["stypes"] = StringAttr.get(s_type_str)
-            if "df.kernel" in func.attributes:
-                new_func.attributes["df.kernel"] = UnitAttr.get()
-            if "df.nested_kernel" in func.attributes:
-                new_func.attributes["df.nested_kernel"] = UnitAttr.get()
-            if "tag" in func.attributes:
-                new_func.attributes["tag"] = StringAttr.get(
-                    func.attributes["tag"].value
-                )
+            _copy_dataflow_attributes(func, new_func)
             # move operations from old func to new func
             cnt_stream = 0
             for op in func.entry_block.operations:
@@ -653,6 +649,22 @@ def _build_top(s, stream_info, enable_layout=False, shared_stateful=None):
     for func in funcs:
         func_name = func.attributes["sym_name"].value
         arg_mapping[func_name] = []
+        generalized_axes = []
+        if "df.pid_generalized_axes" in func.attributes:
+            generalized_axes = [
+                int(value)
+                for value in func.attributes["df.pid_generalized_axes"].value.split(",")
+                if value
+            ]
+        nonlink_count = sum(
+            not any(
+                kind in str(arg.type)
+                for kind in ("!allo.stream", "!allo.wire", "!allo.channel")
+            )
+            for arg in func.arguments
+        )
+        pid_arg_start = nonlink_count - len(generalized_axes)
+        nonlink_index = 0
         for i, arg in enumerate(func.arguments):
             # Wire/Channel links are SystemC-flow links that, like `!allo.stream`,
             # are not region-level arguments; they must be excluded here too
@@ -663,12 +675,18 @@ def _build_top(s, stream_info, enable_layout=False, shared_stateful=None):
                 k in str(arg.type)
                 for k in ("!allo.stream", "!allo.wire", "!allo.channel")
             ):
+                if nonlink_index >= pid_arg_start and generalized_axes:
+                    axis = generalized_axes[nonlink_index - pid_arg_start]
+                    arg_mapping[func_name].append(("pid", axis, arg.type))
+                    nonlink_index += 1
+                    continue
                 arg_name = s.func_args[func_name][i].top_name
                 if "itypes" in func.attributes:
                     input_signed[top_args[arg_name]] = func.attributes["itypes"].value[
                         i
                     ]
-                arg_mapping[func_name].append(top_args[arg_name])
+                arg_mapping[func_name].append(("top", top_args[arg_name], None))
+                nonlink_index += 1
     # update top function
     top_func = None
     for func in s.module.body.operations:
@@ -704,7 +722,22 @@ def _build_top(s, stream_info, enable_layout=False, shared_stateful=None):
         # add call functions
         for i, func in enumerate(funcs):
             func_name = func.attributes["sym_name"].value
-            arg_lst = [new_top.arguments[idx] for idx in arg_mapping[func_name]]
+            pid_text = (
+                func.attributes["df.pid"].value if "df.pid" in func.attributes else ""
+            )
+            pid = [int(value) for value in pid_text.split(",") if value]
+            arg_lst = []
+            for kind, value, arg_type in arg_mapping[func_name]:
+                if kind == "top":
+                    arg_lst.append(new_top.arguments[value])
+                else:
+                    arg_lst.append(
+                        arith_d.ConstantOp(
+                            arg_type,
+                            IntegerAttr.get(arg_type, pid[value]),
+                            ip=InsertionPoint.at_block_terminator(new_top.entry_block),
+                        ).result
+                    )
             stream_lst = [
                 stream_map[stream_name] for stream_name, _ in stream_info[func_name]
             ]
@@ -945,6 +978,7 @@ def _emit_asic_manifest(func, s, project, target, configs):
         project,
         requested["path"],
         debug_dir=requested["debug_dir"] if requested["debug_artifacts"] else None,
+        module=s.module,
     )
     return manifest
 
@@ -953,9 +987,21 @@ def df_primitive_default(s):
     df_pipeline(s.module, rewind=True)
 
 
-def customize(func, enable_tensor=False, opt_default=False):
+def customize(
+    func,
+    enable_tensor=False,
+    opt_default=False,
+    capture_dataflow_audit=False,
+    pid_generalization_policy=None,
+):
     global_vars = get_global_vars(func)
-    s = _customize(func, global_vars=global_vars, enable_tensor=enable_tensor)
+    s = _customize(
+        func,
+        global_vars=global_vars,
+        enable_tensor=enable_tensor,
+        capture_dataflow_audit=capture_dataflow_audit,
+        pid_generalization_policy=pid_generalization_policy,
+    )
     stream_info = move_stream_to_interface(s)
     s = _build_top(
         s, stream_info, shared_stateful=getattr(func, "shared_stateful", None)
@@ -1053,7 +1099,20 @@ def build(
                 )
         return LLVMOMPModule(s.module, s.top_func_name, s.ext_libs)
     # FPGA backend (vitis_hls, vivado_hls, tapa, ihls)
-    s = customize(func, enable_tensor=enable_tensor)
+    from .backend import asic_manifest  # noqa: PLC0415
+
+    build_configs = configs or {}
+    pid_generalization_policy = None
+    if build_configs.get("generalize_pid_specializations", False):
+        pid_generalization_policy = build_configs.get(
+            "pid_generalization_policy", "identity_only"
+        )
+    s = customize(
+        func,
+        enable_tensor=enable_tensor,
+        capture_dataflow_audit=asic_manifest.options(configs) is not None,
+        pid_generalization_policy=pid_generalization_policy,
+    )
     # Before the backend runs: the architecture this build is about to compile,
     # for `allo/backend/asic`'s AAAH nodes. No-op unless `configs` asks.
     _emit_asic_manifest(func, s, project, target, configs)

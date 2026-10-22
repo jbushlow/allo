@@ -3,6 +3,26 @@ set -euo pipefail
 
 : "${testbench_name:=allo_generated_testbench}"
 : "${waveform:=True}"
+: "${ffgl_powerup_mode:=random}"
+: "${ffgl_powerup_seed:=2}"
+
+case "$ffgl_powerup_mode" in
+  random|x|zero|one) ;;
+  *)
+    echo "unsupported FFGL power-up mode: $ffgl_powerup_mode" >&2
+    echo "supported modes: random, x, zero, one" >&2
+    exit 2
+    ;;
+esac
+if ! [[ "$ffgl_powerup_seed" =~ ^[0-9]+$ ]]; then
+  echo "FFGL power-up seed must be a nonnegative integer" >&2
+  exit 2
+fi
+if [[ "$ffgl_powerup_mode" == "random" ]] \
+  && (( 10#$ffgl_powerup_seed < 2 )); then
+  echo "random FFGL power-up seed must be at least 2; VCS reserves 0 and 1" >&2
+  exit 2
+fi
 
 mkdir -p outputs
 rm -f outputs/run.vcd outputs/compile.log outputs/simulation.log \
@@ -27,9 +47,10 @@ if [[ -d inputs/macro-registry ]]; then
       ! -name '*.lvs.v' ! -name '*.pg.v' -print0 | sort -z)
 fi
 sources+=(inputs/design.v)
+# Some vendor Python launchers print environment warnings to stdout first.
 backend=$(python3 -c \
   'import json, sys; print(json.load(open(sys.argv[1])).get(sys.argv[2], sys.argv[3]))' \
-  inputs/testbench-contract.json backend vitis)
+  inputs/testbench-contract.json backend vitis | tail -n 1)
 case "$backend" in
   vitis)
     sources+=(
@@ -42,12 +63,33 @@ case "$backend" in
 esac
 sources+=(inputs/testbench.sv)
 
-vcs -full64 -sverilog -xprop=tmerge -override_timescale=1ns/1ps \
+compile_args=()
+run_args=()
+case "$ffgl_powerup_mode" in
+  x)
+    # VCS X-propagation is mutually exclusive with initreg.
+    compile_args+=("-xprop=tmerge")
+    ;;
+  random|zero|one)
+    initreg_value="$ffgl_powerup_mode"
+    [[ "$initreg_value" == "zero" ]] && initreg_value=0
+    [[ "$initreg_value" == "one" ]] && initreg_value=1
+    # Scope initialization to the DUT so time-zero testbench state is untouched.
+    printf 'tree %s.dut 0 %s\n' \
+      "$testbench_name" "$initreg_value" > ffgl-initreg.config
+    compile_args+=("+vcs+initreg+config+ffgl-initreg.config")
+    run_args+=("+vcs+initreg+config+ffgl-initreg.config")
+    if [[ "$ffgl_powerup_mode" == "random" ]]; then
+      run_args+=("+vcs+initreg+$ffgl_powerup_seed")
+    fi
+    ;;
+esac
+
+vcs -full64 -sverilog "${compile_args[@]}" -override_timescale=1ns/1ps \
   -top "$testbench_name" +delay_mode_zero +define+TETRAMAX \
   -o simv "${sources[@]}" \
   2>&1 | tee outputs/compile.log
 
-run_args=()
 if [[ "$waveform" == "True" ]]; then
   run_args+=("+ALLO_DUMP_VCD")
 fi
@@ -56,4 +98,6 @@ fi
 python3 report_sim.py --mode ffgl --compile-log outputs/compile.log \
   --simulation-log outputs/simulation.log --vcd outputs/run.vcd \
   --macro-model-count "$macro_model_count" \
+  --powerup-mode "$ffgl_powerup_mode" \
+  --powerup-seed "$ffgl_powerup_seed" \
   --output outputs/simulation-report.json

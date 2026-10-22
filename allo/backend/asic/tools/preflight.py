@@ -132,10 +132,20 @@ def check_tools():
 def check_flow():
     nodes = os.path.join(FLOW, "nodes")
     if os.path.isdir(nodes):
-        good("node library", f"{len(os.listdir(nodes))} nodes at {nodes}")
+        good("node library", nodes)
     else:
         missing(f"no node library at {nodes}",
                 "set ALLO_ASIC_FLOW, or check out allo/backend/asic")
+        return
+    legacy = os.path.join(nodes, "legacy-flat-flow")
+    required = ("sv2v-design-collector", "synopsys-dc-synthesis")
+    absent = [name for name in required
+              if not os.path.isdir(os.path.join(legacy, name))]
+    if absent:
+        missing("legacy flat node set is incomplete",
+                f"missing {', '.join(absent)} beneath {legacy}")
+    else:
+        good("legacy flat node set", legacy)
     adk = os.path.join(FLOW, "adks", "freepdk-45nm", "configure.yml")
     if os.path.isfile(adk):
         good("ADK definition", adk)

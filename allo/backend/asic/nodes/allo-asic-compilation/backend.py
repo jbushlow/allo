@@ -112,7 +112,10 @@ def configure_backend(backend, clock_period, options_text):
         return "systemc", configs, {
             "device": device,
             "rtl_stage": "rtl",
-            "frontend": "systemc_connections",
+            "frontend": "systemc",
+            "channel_protocol": "connections",
+            "synthesis_engine": "catapult",
+            "rtl_artifact": "concat_rtl.v",
         }
     else:
         raise ValueError(

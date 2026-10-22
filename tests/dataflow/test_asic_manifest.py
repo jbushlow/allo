@@ -27,7 +27,10 @@ east and `p_fwd` going south, the manifest carried the array.
 """
 
 import importlib.util
+import hashlib
 import json
+import shutil
+import subprocess
 import sys
 from pathlib import Path
 
@@ -50,6 +53,116 @@ MANIFEST_CONFIG = {
 }
 
 
+def _write(path, text):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+
+
+def _vitis_fixture(pre, root, missing_sink=False):
+    """Write reduced emitted-HLS, log, and RTL artifacts for one chain."""
+    source = root / "kernel.cpp"
+    log = root / "solution1.log"
+    rtl = root / "verilog"
+    top = pre["top"]
+    functions = []
+    log_lines = []
+    for pe in pre["pe_instances"]:
+        function = pe["rtl_instance"]
+        functions.append(f"void {function}() {{ int value = 1; }}")
+        process = function if pe["kernel"] == "source" else f"{function}.1"
+        legalized = process.replace(".", "_")
+        log_lines.append(f"INFO: -- Generating RTL for module '{process}'")
+        if process != legalized:
+            log_lines.append(
+                f"WARNING: Legalizing function name '{process}' to '{legalized}'."
+            )
+        if missing_sink and pe["kernel"] == "sink":
+            continue
+        module = f"{top}_{legalized}"
+        child = f"{module}_Pipeline_LOOP_1"
+        _write(
+            rtl / f"{module}.v",
+            f"module {module}(input ap_clk); {child} process(); endmodule\n",
+        )
+        _write(rtl / f"{child}.v", f"module {child}(); endmodule\n")
+    _write(source, "\n".join(functions) + "\n")
+    _write(log, "\n".join(log_lines) + "\n")
+    _write(rtl / f"{top}.v", f"module {top}(); endmodule\n")
+    _write(rtl / f"{top}_gmem0_m_axi.v", f"module {top}_gmem0_m_axi(); endmodule\n")
+    return source, log, rtl
+
+
+def _systemc_fixture(project):
+    """Write the minimal artifacts that define the supported SystemC path."""
+    rtl = project / "build/Catapult/top.v1"
+    _write(
+        project / "kernel.cpp",
+        """
+SC_MODULE(pe_0) {
+  Connections::In<ac_int<16, true> > in;
+  Connections::Out<ac_int<16, true> > out;
+  void run() { while (1) { int value = 1; wait(); } }
+};
+""",
+    )
+    _write(
+        rtl / "concat_rtl.v",
+        """
+module top(clk, rst, done, v10_radr, v10_re, v10_q, v10_rrdy,
+           v11_wadr, v11_d, v11_we, v11_wrdy);
+  input clk; input rst; output done;
+  output [1:0] v10_radr; output v10_re;
+  input [15:0] v10_q; input v10_rrdy;
+  output [1:0] v11_wadr; output [15:0] v11_d;
+  output v11_we; input v11_wrdy;
+  pe_0 u0(.clk(clk), .rst(rst));
+endmodule
+module pe_0(clk, rst);
+  input clk; input rst;
+  pe_0_run run_inst(.clk(clk), .rst(rst));
+endmodule
+module pe_0_run(clk, rst);
+  input clk; input rst;
+endmodule
+""",
+    )
+    _write(
+        project / "run.tcl",
+        "directive set -CLOCK_PERIOD 8.0\n"
+        "solution library add nangate-45nm_beh\n",
+    )
+    _write(
+        rtl / "catapult.log",
+        "Catapult Ultra Synthesis 2024.3_16.10\n",
+    )
+    return rtl
+
+
+def _single_pe_pre(function="pe", semantic_id="top/pe/pid=0"):
+    return {
+        "schema_version": 2,
+        "stage": "pre_hls",
+        "backend": "vitis",
+        "top": "top",
+        "pe_instances": [
+            {
+                "semantic_id": semantic_id,
+                "kernel": "pe",
+                "pid": [0],
+                "rtl_instance": function,
+                "pre_hls_implementation_contract": {
+                    "canonical_specialized_mlir_hash": "mlir"
+                },
+                "pre_hls_implementation_contract_hash": "pre-hls",
+                "ports": [],
+            }
+        ],
+        "channels": [],
+        "macro_groups": [],
+        "summary": {},
+    }
+
+
 def _load(name, relative):
     """Load one of the flow's node scripts as a module, by path.
 
@@ -67,11 +180,11 @@ def _load(name, relative):
 
 plan_macros = _load(
     "allo_asic_plan_macros",
-    "allo-macro-generation/allo-asic-macro-plan/plan_macros.py",
+    "allo-asic-macro-plan/plan_macros.py",
 )
 physical_intent = _load(
     "allo_asic_physical_intent",
-    "allo-full-chip/allo-asic-physical-intent/plan_physical_intent.py",
+    "allo-asic-physical-intent/plan_physical_intent.py",
 )
 
 
@@ -286,13 +399,13 @@ def test_build_manifest_top_arguments_uses_the_realized_order():
 # ---------------------------------------------------------------------------
 
 
-def _chain_region():
+def _chain_region(depth=4):
     Ty = int32
     M = 8
 
     @df.region()
     def chain(A: Ty[M], B: Ty[M]):
-        pipe: Stream[Ty, 4]
+        pipe: Stream[Ty, depth]
 
         @df.kernel(mapping=[1], args=[A])
         def source(local_a: Ty[M]):
@@ -339,17 +452,67 @@ def test_build_writes_what_the_compilation_node_asks_for(tmp_path):
         "gmem1",
     ]
     assert manifest["top_interface"]["clock"]["name"] == "ap_clk"
+    assert sum(group["member_count"] for group in manifest["candidate_groups"]) == 2
+
+    by_kernel = {pe["kernel"]: pe for pe in manifest["pe_instances"]}
+    assert by_kernel["source"]["ports"][0]["operation"] == "put"
+    assert by_kernel["sink"]["ports"][0]["operation"] == "get"
+    for pe in by_kernel.values():
+        contract = pe["pre_hls_implementation_contract"]
+        assert contract["canonical_specialized_mlir_hash"] == (
+            pe["pre_hls_equivalence_hash"]
+        )
+        assert contract["stream_interface"][0]["type"] == "!allo.stream<i32, 4>"
+
+        raw = (
+            project / "asic-debug/functions" / f"{pe['rtl_instance']}.mlir"
+        ).read_text()
+        canonical = (
+            (project / "asic-debug/canonical/pre-hls" / f"{pe['rtl_instance']}.txt")
+            .read_text()
+            .strip()
+        )
+        assert canonical == asic_manifest.canonical_pre_hls_ir(raw)
+        assert hashlib.sha256(canonical.encode()).hexdigest() == (
+            pe["pre_hls_equivalence_hash"]
+        )
 
 
-def test_enrichment_joins_the_design_to_the_rtl_it_became(tmp_path):
-    """The post-HLS half: which module is which PE, and which are one macro.
+def test_pre_hls_canonicalization_ignores_names_but_keeps_behavior():
+    first = """
+func.func @pe_0(%left: i32, %right: i32) {
+  %sum = arith.addi %left, %right : i32
+  %constant = arith.constant 1 : i32
+  %out = arith.addi %sum, %constant : i32
+  func.return
+}
+"""
+    renamed = first.replace("@pe_0", "@pe_1").replace("%sum", "%generated")
+    changed = renamed.replace("constant 1", "constant 2")
+    assert asic_manifest.canonical_pre_hls_ir(first) == (
+        asic_manifest.canonical_pre_hls_ir(renamed)
+    )
+    assert asic_manifest.canonical_pre_hls_ir(first) != (
+        asic_manifest.canonical_pre_hls_ir(changed)
+    )
 
-    Vitis names a kernel's module `<top>_<instance>`, sometimes with a
-    disambiguating suffix, and splits pipelined loops into `<root>_...`
-    children. Two PEs are one macro class when their root modules are the same
-    text once the instance's own name is spelled out of them -- which is what
-    makes macro reuse a claim about hardware and not about naming.
-    """
+
+def test_pre_hls_contract_keeps_stream_depth():
+    manifests = []
+    for depth in (2, 4):
+        schedule = df.customize(_chain_region(depth))
+        manifests.append(asic_manifest.collect(schedule.module, schedule.top_func_name))
+    source = [
+        next(pe for pe in manifest["pe_instances"] if pe["kernel"] == "source")
+        for manifest in manifests
+    ]
+    assert source[0]["pre_hls_implementation_contract_hash"] != (
+        source[1]["pre_hls_implementation_contract_hash"]
+    )
+
+
+def test_enrichment_joins_compiler_hls_and_rtl_evidence(tmp_path):
+    """The final manifest joins compiler identity through emitted HLS to RTL."""
     project = tmp_path / "top.prj"
     df.build(
         _chain_region(),
@@ -364,25 +527,8 @@ def test_enrichment_joins_the_design_to_the_rtl_it_became(tmp_path):
     )
     pre = json.loads((project / "asic-manifest.json").read_text())
     top = pre["top"]
-
-    rtl = tmp_path / "verilog"
-    rtl.mkdir()
-    body = "module {name} (input ap_clk);\n  wire {name}_w;\nendmodule\n"
-    for pe in pre["pe_instances"]:
-        instance = pe["rtl_instance"]
-        root = f"{top}_{instance}"
-        # `sink` gets the disambiguated spelling Vitis uses for a cloned
-        # function, so the join is exercised on both forms.
-        if pe["kernel"] == "sink":
-            root = f"{root}_1"
-        (rtl / f"{root}.v").write_text(body.format(name=root))
-        (rtl / f"{root}_Pipeline_LOOP_1.v").write_text(
-            body.format(name=f"{root}_Pipeline_LOOP_1")
-        )
-    (rtl / f"{top}.v").write_text(body.format(name=top))
-    (rtl / f"{top}_gmem0_m_axi.v").write_text(body.format(name=f"{top}_gmem0_m_axi"))
-
-    final = asic_manifest.enrich(pre, str(rtl))
+    source, log, rtl = _vitis_fixture(pre, tmp_path / "artifacts")
+    final = asic_manifest.enrich(pre, rtl, source, log)
     assert final["stage"] == "post_hls_enriched"
     assert final["summary"]["unmatched_or_ambiguous"] == 0
     assert final["summary"]["unjoined_post_hls_records"] == 0
@@ -396,15 +542,20 @@ def test_enrichment_joins_the_design_to_the_rtl_it_became(tmp_path):
         f"{top}/sink/pid=0": f"{top}_sink_0_1",
     }
     for pe in final["pe_instances"]:
-        names = [module["name"] for module in pe["post_hls_records"][0]["rtl_modules"]]
-        assert len(names) == 2 and names[1].endswith("_Pipeline_LOOP_1")
+        record = pe["post_hls_records"][0]
+        assert record["implementation_contract"]["pre_hls_contract_hash"] == (
+            pe["pre_hls_implementation_contract_hash"]
+        )
+        assert len(record["rtl_dependency_modules"]) == 2
+        assert record["rtl_dependency_modules"][1].endswith("_Pipeline_LOOP_1")
 
-    # The two roots are the same text once each instance's name is removed, so
-    # they hash alike -- but they are different kernels, so they are different
-    # macro classes. Equivalence is per kernel by construction.
+    # Different specialized MLIR contracts remain distinct even when reduced
+    # emitted-HLS fixtures happen to have identical bodies.
     assert len(final["macro_groups"]) == 2
     for group in final["macro_groups"]:
         assert group["proof"]["status"] == "proven"
+        assert group["proof"]["method"] == ("specialized_mlir_emitted_hls_contract")
+        assert group["rtl_audit"]["authority"] is False
         assert group["member_count"] == 1
         assert group["representative"] in roots
     assert f"{top}_gmem0_m_axi" in final["support_modules"]
@@ -428,20 +579,439 @@ def test_enrichment_reports_a_pe_it_could_not_join(tmp_path):
         },
     )
     pre = json.loads((project / "asic-manifest.json").read_text())
-    top = pre["top"]
-    rtl = tmp_path / "verilog"
-    rtl.mkdir()
-    (rtl / f"{top}_source_0.v").write_text(
-        f"module {top}_source_0 (input ap_clk);\nendmodule\n"
-    )
-    # `sink`'s module is absent, and a module named after it is left over.
-    (rtl / f"{top}_sink_0_stray.v").write_text(
-        f"module {top}_sink_0_stray (input ap_clk);\nendmodule\n"
-    )
-    final = asic_manifest.enrich(pre, str(rtl))
+    source, log, rtl = _vitis_fixture(pre, tmp_path / "artifacts", missing_sink=True)
+    final = asic_manifest.enrich(pre, rtl, source, log)
     assert final["summary"]["unmatched_or_ambiguous"] == 1
-    assert final["summary"]["ambiguous_pe_instances"] == [f"{top}/sink/pid=0"]
+    assert final["summary"]["unmatched_pe_instances"] == [f"{pre['top']}/sink/pid=0"]
     assert final["summary"]["unjoined_post_hls_records"] == 1
+
+
+def test_inlined_function_joins_through_an_inner_loop_label(tmp_path):
+    pre = _single_pe_pre("gemm_2_3_fixed", "top/gemm/pid=2,3")
+    source = tmp_path / "kernel.cpp"
+    log = tmp_path / "solution1.log"
+    rtl = tmp_path / "rtl"
+    _write(
+        source,
+        """void gemm_2_3_fixed() {
+  outer: for (;;) {
+    inner7: for (;;) {}
+  }
+}
+""",
+    )
+    process = "MXU_0_1_Pipeline_inner7"
+    legalized = "MXU_0_1_Pipeline_inner7"
+    module = f"top_{legalized}"
+    _write(
+        log,
+        "INFO: Inlining function 'gemm_2_3_fixed' into 'MXU_0'\n"
+        f"INFO: -- Generating RTL for module '{process}'\n",
+    )
+    _write(rtl / "pe.v", f"module {module}(); endmodule\n")
+    _write(rtl / "parent.v", f"module parent(); {module} pe_U0(); endmodule\n")
+
+    final = asic_manifest.enrich(pre, rtl, source, log)
+    record = final["post_hls_records"][0]
+    assert record["semantic_id"] == "top/gemm/pid=2,3"
+    assert record["mapping_mode"] == "inlined_pipeline"
+    assert record["vitis_process"] == process
+    assert record["rtl_root_module"] == "parent"
+    assert final["rtl_hierarchy"]["module_instances"][0]["module"] == module
+
+    _write(rtl / "parent2.v", f"module parent2(); {module} pe_U1(); endmodule\n")
+    ambiguous = asic_manifest.enrich(pre, rtl, source, log)
+    assert ambiguous["post_hls_records"][0]["status"] == "ambiguous_rtl_root"
+    assert ambiguous["summary"]["unmatched_or_ambiguous"] == 1
+
+
+def test_direct_process_takes_precedence_over_its_multiple_pipelines(tmp_path):
+    """Internal pipeline modules are dependencies, not competing PE roots."""
+    pre = _single_pe_pre("loader_0", "top/loader/pid=0")
+    source = tmp_path / "kernel.cpp"
+    log = tmp_path / "solution1.log"
+    rtl = tmp_path / "rtl"
+    _write(
+        source,
+        """void loader_0() {
+  load_row_0: for (int i=0; i<2; ++i) {}
+  load_row_1: for (int i=0; i<2; ++i) {}
+}
+""",
+    )
+    process = "loader_0.1"
+    legalized = "loader_0_1"
+    root = f"top_{legalized}"
+    pipeline_0 = f"{root}_Pipeline_load_row_0"
+    pipeline_1 = f"{root}_Pipeline_load_row_1"
+    _write(
+        log,
+        """INFO: detected/extracted 1 process function(s):
+ 'loader_0.1'.
+INFO: next phase
+WARNING: Legalizing function name 'loader_0.1' to 'loader_0_1'.
+INFO: -- Generating RTL for module 'loader_0_1_Pipeline_load_row_0'
+INFO: -- Generating RTL for module 'loader_0_1_Pipeline_load_row_1'
+INFO: -- Generating RTL for module 'loader_0_1'
+""",
+    )
+    _write(
+        rtl / "loader.v",
+        f"module {root}(); {pipeline_0} row0(); {pipeline_1} row1(); endmodule\n",
+    )
+    _write(rtl / "row0.v", f"module {pipeline_0}(); endmodule\n")
+    _write(rtl / "row1.v", f"module {pipeline_1}(); endmodule\n")
+    _write(rtl / "top.v", f"module top(); {root} loader_U0(); endmodule\n")
+
+    final = asic_manifest.enrich(pre, rtl, source, log)
+    record = final["post_hls_records"][0]
+    assert record["status"] == "matched"
+    assert record["mapping_mode"] == "direct_or_cloned"
+    assert record["vitis_process"] == process
+    assert record["legalized_process"] == legalized
+    assert record["rtl_root_module"] == root
+    assert record["rtl_dependency_modules"] == [root, pipeline_0, pipeline_1]
+    assert final["summary"]["unmatched_or_ambiguous"] == 0
+
+
+def test_clone_suffix_uses_compiler_identity_and_ambiguous_clones_fail_closed(
+    tmp_path,
+):
+    pre = _single_pe_pre()
+    source = tmp_path / "kernel.cpp"
+    log = tmp_path / "solution1.log"
+    rtl = tmp_path / "rtl"
+    _write(source, "void pe() { for (int i=0; i<4; ++i) {} }\n")
+    _write(
+        log,
+        "WARNING: Legalizing function name 'pe.1' to 'pe_1'.\n"
+        "INFO: -- Generating RTL for module 'pe_1'\n",
+    )
+    _write(rtl / "pe.v", "module top_pe_1(); endmodule\n")
+    final = asic_manifest.enrich(pre, rtl, source, log)
+    assert final["post_hls_records"][0]["legalized_process"] == "pe_1"
+    assert final["post_hls_records"][0]["semantic_id"] == "top/pe/pid=0"
+
+    _write(
+        log,
+        """INFO: detected/extracted 2 process function(s):
+ 'pe'
+ 'pe.1'.
+INFO: next phase
+""",
+    )
+    ambiguous = asic_manifest.enrich(pre, rtl, source, log)
+    assert ambiguous["post_hls_records"][0]["status"] == "ambiguous_hls_process"
+    assert ambiguous["summary"]["unmatched_or_ambiguous"] == 1
+    assert ambiguous["macro_groups"] == []
+
+
+def test_empty_hls_is_allowed_but_ambiguous_rtl_fails_closed(tmp_path):
+    pre = _single_pe_pre()
+    source = tmp_path / "kernel.cpp"
+    log = tmp_path / "solution1.log"
+    rtl = tmp_path / "rtl"
+    rtl.mkdir()
+    _write(source, "void pe() {}\n")
+    _write(log, "INFO: synthesis completed\n")
+    empty = asic_manifest.enrich(pre, rtl, source, log)
+    assert empty["post_hls_records"][0]["status"] == "empty_source"
+    assert empty["summary"]["unmatched_or_ambiguous"] == 0
+
+    _write(source, "void pe() { int value = 1; }\n")
+    _write(log, "INFO: -- Generating RTL for module 'pe'\n")
+    _write(rtl / "one.v", "module top_pe(); endmodule\n")
+    _write(rtl / "two.v", "module wrapper_pe(); endmodule\n")
+    ambiguous = asic_manifest.enrich(pre, rtl, source, log)
+    assert ambiguous["post_hls_records"][0]["status"] == "ambiguous_rtl_module"
+    assert ambiguous["summary"]["unmatched_or_ambiguous"] == 1
+    assert ambiguous["macro_groups"] == []
+
+
+def test_equivalence_uses_hls_contract_and_rtl_is_diagnostic():
+    base = {
+        "status": "matched",
+        "pre_hls_implementation_contract_hash": "pre",
+        "hls_equivalence_hash": "hls",
+        "hls_interface_signature": {"ports": []},
+        "mapping_mode": "direct_or_cloned",
+        "synthesis_contract": {"clock_period_ns": 5},
+        "rtl_modules": [{"name": "pe", "file": "pe.v"}],
+    }
+    records = [
+        dict(base, semantic_id="pe/0", rtl_equivalence_hash="rtl-a"),
+        dict(base, semantic_id="pe/1", rtl_equivalence_hash="rtl-b"),
+    ]
+    groups, audits = asic_manifest.build_equivalence_groups(records)
+    assert len(groups) == 1
+    assert groups[0]["rtl_audit"]["status"] == "generated_rtl_diverged"
+    assert groups[0]["rtl_audit"]["authority"] is False
+    assert audits[0]["status"] == "diagnostic_only_representative_will_be_used"
+
+    records[1]["synthesis_contract"] = {"clock_period_ns": 10}
+    assert len(asic_manifest.build_equivalence_groups(records)[0]) == 2
+
+
+def test_hls_canonicalization_keeps_behavior_and_interface():
+    first = asic_manifest.parse_cpp_functions(
+        """void loader_0(hls::stream<int> &west, hls::stream<int> &east) {
+  loop17: for (int i17=0; i17<4; ++i17) { east.write(west.read()); }
+}
+"""
+    )[0]
+    renamed = asic_manifest.parse_cpp_functions(
+        """void loader_1(hls::stream<int> &north, hls::stream<int> &south) {
+  loop93: for (int j=0; j<4; ++j) { south.write(north.read()); }
+}
+"""
+    )[0]
+    nonblocking = asic_manifest.parse_cpp_functions(
+        "void pe(hls::stream<int> &x) { int v; bool ok = x.read_nb(v); }"
+    )[0]
+    different_type = asic_manifest.parse_cpp_functions(
+        "void pe(hls::stream<short> &x) { short v = x.read(); }"
+    )[0]
+    digest, interface = asic_manifest.canonical_hls_fingerprint(first)
+    assert digest == asic_manifest.canonical_hls_fingerprint(renamed)[0]
+    assert digest != asic_manifest.canonical_hls_fingerprint(nonblocking)[0]
+    assert digest != asic_manifest.canonical_hls_fingerprint(different_type)[0]
+    assert interface["ports"] == [
+        {"type": "hls::stream<int> &", "direction": "in"},
+        {"type": "hls::stream<int> &", "direction": "out"},
+    ]
+
+    multidimensional = asic_manifest.parse_cpp_functions(
+        "void drv(ac_ieee_float<binary16> data[2][32]) { data[0][0] = 1; }"
+    )[0]
+    assert multidimensional.parameters == (("data", "ac_ieee_float<binary16> [2][32]"),)
+
+
+def test_rtl_canonicalization_ignores_spelling_but_keeps_behavior():
+    first = """
+module pe_a(input [7:0] west, output [7:0] east);
+wire [7:0] value_a;
+assign value_a = west + 8'd1;
+assign east = value_a;
+endmodule
+"""
+    renamed = """
+module pe_b(input [7:0] north, output [7:0] south);
+wire [7:0] temporary;
+assign south = temporary;
+assign temporary = north + 8'd1;
+endmodule
+"""
+    first_hash = asic_manifest.canonical_rtl_fingerprint(first)
+    assert first_hash == asic_manifest.canonical_rtl_fingerprint(renamed)
+    assert first_hash != asic_manifest.canonical_rtl_fingerprint(
+        renamed.replace("8'd1", "8'd2")
+    )
+    assert first_hash != asic_manifest.canonical_rtl_fingerprint(
+        first.replace("[7:0]", "[8:0]", 1)
+    )
+    child_a = "module p(input x, output y); child_a u0(x, y); endmodule"
+    child_b = "module p(input x, output y); child_b u0(x, y); endmodule"
+    assert asic_manifest.canonical_rtl_fingerprint(
+        child_a
+    ) != asic_manifest.canonical_rtl_fingerprint(child_b)
+    serialized = asic_manifest.canonical_rtl_serialization(
+        "module p(a,z,io); input a; output z; inout io; assign z=a; endmodule"
+    )
+    assert all(f"{bucket}:" in serialized for bucket in ("inputs", "outputs", "inouts"))
+
+    direct = """
+module a(input [7:0] x, input [7:0] y, output [7:0] z, output [7:0] q);
+assign z = x + 8'd1;
+assign q = y ^ 8'h5a;
+endmodule
+"""
+    aliased = """
+module b(input [7:0] north, input [7:0] west, output [7:0] south, output [7:0] east);
+wire [7:0] temporary;
+assign temporary = north;
+assign east = west ^ 8'h5a;
+assign south = temporary + 8'd1;
+endmodule
+"""
+    assert asic_manifest.canonical_rtl_fingerprint(
+        direct
+    ) == asic_manifest.canonical_rtl_fingerprint(aliased)
+
+
+def test_vitis_synthesis_contract_and_dependency_free_tcl(tmp_path):
+    contract = asic_manifest.parse_vitis_synthesis_contract(
+        "Vitis HLS - High-Level Synthesis v2022.1 (64-bit)\n"
+        "INFO: Running: set_part {xcu280-test}\n"
+        "INFO: Running: create_clock -period 8.00\n"
+    )
+    assert contract["tool_version"] == "2022.1"
+    assert contract["target_part"] == "xcu280-test"
+    assert contract["clock_period_ns"] == 8.0
+
+    manifest = {
+        "schema_version": 2,
+        "stage": "pre_hls",
+        "summary": {"matched": 2, "safe": True},
+        "members": ["pe/call=0", "pe/call=$1"],
+    }
+    text = asic_manifest.to_tcl(manifest)
+    assert "package require" not in text
+    assert "set allo_asic_manifest [dict create" in text
+    if shutil.which("tclsh"):
+        check = tmp_path / "check.tcl"
+        check.write_text(
+            text
+            + "\nputs [dict get $allo_asic_manifest summary matched]\n"
+            + "puts [lindex [dict get $allo_asic_manifest members] 1]\n"
+        )
+        result = subprocess.run(
+            ["tclsh", str(check)], check=True, capture_output=True, text=True
+        )
+        assert result.stdout.splitlines() == ["2", "pe/call=$1"]
+
+
+def test_post_hls_debug_artifacts_are_exact_hash_inputs(tmp_path):
+    pre = _single_pe_pre()
+    source = tmp_path / "kernel.cpp"
+    log = tmp_path / "solution1.log"
+    rtl = tmp_path / "rtl"
+    _write(source, "void pe() { int generated = 1; }\n")
+    _write(log, "INFO: -- Generating RTL for module 'pe'\n")
+    _write(rtl / "top_pe.v", "module top_pe(); wire generated; endmodule\n")
+    final = asic_manifest.enrich(pre, rtl, source, log)
+    debug = tmp_path / "debug"
+    asic_manifest.write_post_hls_debug(final, debug, source, log, rtl)
+
+    hls_text = (debug / "canonical/hls/pe.txt").read_text().strip()
+    rtl_text = (debug / "canonical/rtl/top_pe.txt").read_text().strip()
+    function = asic_manifest.parse_cpp_functions(source.read_text())[0]
+    assert hashlib.sha256(hls_text.encode()).hexdigest() == (
+        asic_manifest.canonical_hls_fingerprint(function)[0]
+    )
+    assert hashlib.sha256(rtl_text.encode()).hexdigest() == (
+        asic_manifest.canonical_rtl_fingerprint((rtl / "top_pe.v").read_text())
+    )
+    assert (debug / "parsed-vitis-log.json").is_file()
+
+
+def test_emit_final_uses_the_integrated_vitis_path(tmp_path):
+    project = tmp_path / "build"
+    solution = project / "top.prj" / "solution1"
+    rtl = solution / "syn" / "verilog"
+    pre = _single_pe_pre()
+    _write(project / "asic-manifest.json", json.dumps(pre))
+    _write(project / "kernel.cpp", "void pe() { int value = 1; }\n")
+    _write(
+        project / "run.tcl",
+        "set_part {xcu280-test}\ncreate_clock -period 5.0\n",
+    )
+    _write(
+        solution / "solution1.log",
+        "Vitis HLS - High-Level Synthesis v2022.1\n"
+        "INFO: -- Generating RTL for module 'pe'\n",
+    )
+    _write(rtl / "top_pe.v", "module top_pe(); endmodule\n")
+    configs = {
+        "asic_manifest": {
+            "enabled": True,
+            "path": "asic-manifest.json",
+            "debug_artifacts": True,
+            "debug_dir": "asic-debug",
+        }
+    }
+
+    final = asic_manifest.emit_final(str(project), configs, "vitis")
+    assert final["summary"]["matched"] == 1
+    assert final["post_hls_records"][0]["synthesis_contract"] == {
+        "backend": "vitis_hls",
+        "tool_version": "2022.1",
+        "target_part": "xcu280-test",
+        "clock_period_ns": 5.0,
+        "hierarchy_policy": "vitis_dataflow_process",
+    }
+    assert (project / "asic-manifest-final.json").is_file()
+    assert (project / "asic-manifest-final.tcl").is_file()
+    assert (project / "asic-debug/canonical/hls/pe.txt").is_file()
+    assert (project / "asic-debug/canonical/rtl/top_pe.txt").is_file()
+
+
+def test_emit_final_uses_the_integrated_systemc_path(tmp_path):
+    project = tmp_path / "project"
+    pre = _single_pe_pre("pe_0")
+    pre.update(
+        {
+            "backend": "systemc",
+            "top_arguments": [
+                {
+                    "ordinal": 0,
+                    "name": "src",
+                    "shape": [4],
+                    "type": "i16",
+                    "direction": "input",
+                },
+                {
+                    "ordinal": 1,
+                    "name": "dst",
+                    "shape": [4],
+                    "type": "i16",
+                    "direction": "output",
+                },
+            ],
+        }
+    )
+    _write(project / "asic-manifest.json", json.dumps(pre))
+    rtl = _systemc_fixture(project)
+
+    final = asic_manifest.emit_final(str(project), {
+        "asic_manifest": dict(MANIFEST_CONFIG)
+    }, "systemc")
+
+    assert final["backend"] == "systemc"
+    assert final["summary"]["matched"] == 1
+    assert final["summary"]["unjoined_post_hls_records"] == 0
+    record = final["post_hls_records"][0]
+    assert record["mapping_mode"] == "systemc_module"
+    assert record["rtl_root_module"] == "pe_0"
+    assert record["rtl_dependency_modules"] == ["pe_0", "pe_0_run"]
+    assert record["synthesis_contract"] == {
+        "backend": "systemc",
+        "frontend": "allo_systemc_connections",
+        "tool_version": "2024.3_16.10",
+        "clock_period_ns": 8.0,
+        "technology_library": "nangate-45nm_beh",
+        "hierarchy_policy": "explicit_blocks",
+    }
+
+    src, dst = final["top_arguments"]
+    assert (src["name"], src["catapult_argument"]) == ("src", "v10")
+    assert src["interface_protocol"] == "systemc_sync_memory_read"
+    assert src["interface"]["read_latency_cycles"] == 1
+    assert src["interface"]["address_capacity"] == 4
+    assert (dst["name"], dst["catapult_argument"]) == ("dst", "v11")
+    assert dst["interface_protocol"] == "systemc_sync_memory_write"
+    assert final["top_interface"]["protocol"] == "systemc_connections"
+    assert final["top_interface"]["completion"]["port"] == "done"
+    assert final["top_interface"]["reset"]["polarity"] == "active_low"
+    assert final["rtl_artifact"]["path"] == str(rtl / "concat_rtl.v")
+    assert final["rtl_artifact"]["self_contained"] is True
+    assert (project / "asic-manifest-final.json").is_file()
+    assert (project / "asic-manifest-final.tcl").is_file()
+    assert (project / "asic-debug/systemc-rtl-path.txt").read_text().strip() == (
+        str(rtl / "concat_rtl.v")
+    )
+
+
+def test_systemc_rtl_directory_prefers_top_concat(tmp_path):
+    project = tmp_path / "project"
+    top = project / "build/Catapult/top.v1"
+    _write(top / "concat_rtl.v", "module top(); endmodule\n")
+    for name in ("load_a", "load_b", "consume_c"):
+        _write(
+            project / f"build/Catapult/td_ccore_solutions/{name}/rtl.v",
+            f"module {name}(); endmodule\n",
+        )
+
+    assert asic_manifest.rtl_directory("systemc", project) == str(top)
 
 
 def test_split_instance_prefers_the_regions_own_kernel_names():

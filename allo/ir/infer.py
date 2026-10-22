@@ -821,10 +821,18 @@ class TypeInferer(ASTVisitor):
                                 mapping is not None
                             ), f"Invalid @df.kernel decorator on function '{node.name}': missing required 'mapping' parameter."
                             old_ctx.mapping = mapping
+                            generalized_count = len(
+                                getattr(node, "pid_generalized_axes", [])
+                            )
+                            source_args = (
+                                node.args.args[:-generalized_count]
+                                if generalized_count
+                                else node.args.args
+                            )
                             assert len(kernel_args) == len(
-                                node.args.args
-                            ), f"Invalid @df.kernel decorator on function '{node.name}': 'args' length mismatch (expected {len(node.args.args)}, got {len(kernel_args)})."
-                            for top_arg_name, arg in zip(kernel_args, node.args.args):
+                                source_args
+                            ), f"Invalid @df.kernel decorator on function '{node.name}': 'args' length mismatch (expected {len(source_args)}, got {len(kernel_args)})."
+                            for top_arg_name, arg in zip(kernel_args, source_args):
                                 top_arg = ctx.get_symbol(name=top_arg_name.id)
                                 if top_arg.shape == ():
                                     raise ValueError(
@@ -844,6 +852,8 @@ class TypeInferer(ASTVisitor):
                                 arg.top_arg = top_arg_name.id
                             orig_name = node.name
                             old_ctx.func_predicate_tags[orig_name] = {}
+                            if ctx.capture_dataflow_audit:
+                                old_ctx.func_selected_branch_traces[orig_name] = {}
                             if ctx.unroll:
                                 for dim in np.ndindex(*mapping):
                                     new_ctx = old_ctx.copy()
@@ -860,6 +870,13 @@ class TypeInferer(ASTVisitor):
                                     node.name = construct_kernel_name(orig_name, dim)
                                     # check on a specific df.kernel instance
                                     TypeInferer.visit_FunctionDef(new_ctx, node)
+                                    if ctx.capture_dataflow_audit:
+                                        old_ctx.func_predicate_tags[orig_name][
+                                            dim
+                                        ] = new_ctx.predicate_list
+                                        old_ctx.func_selected_branch_traces[orig_name][
+                                            dim
+                                        ] = list(new_ctx.selected_branch_trace)
                                     node.name = orig_name
                             else:
                                 # If not unroll, only visit one 'sample' to get the execution predicates
@@ -1716,6 +1733,12 @@ class TypeInferer(ASTVisitor):
         else:
             raise RuntimeError("Unsupported meta function")
         if ctx.unroll and final_cond:
+            if ctx.capture_dataflow_audit:
+                branch_kind = node.items[0].context_expr.func.attr
+                ctx.selected_branch_trace.append(
+                    f"{branch_kind}@{getattr(node, 'lineno', 0)}:"
+                    f"{getattr(node, 'col_offset', 0)}"
+                )
             ctx.with_scope_level += 1
             with ctx.block_scope_guard():
                 visit_stmts(ctx, node.body)

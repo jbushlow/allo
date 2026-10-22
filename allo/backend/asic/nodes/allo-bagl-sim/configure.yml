@@ -28,7 +28,7 @@ outputs:
 commands:
   - python3 prepare_sdf.py
   - bash run.sh
-  - python3 inputs/cleanup-node.py --node allo-bagl-sim --output bagl-cleanup-metrics.json simv simv.daidir csrc DVEfiles ucli.key .vcs.timestamp
+  - python3 inputs/cleanup-node.py --node allo-bagl-sim --output bagl-cleanup-metrics.json simv simv.daidir csrc DVEfiles ucli.key .vcs.timestamp bagl-initreg.config
 
 parameters:
   testbench_name: allo_generated_testbench
@@ -46,6 +46,8 @@ parameters:
   bagl_input_delay_ns: 0.025
   bagl_output_delay_ns: 0.025
   bagl_num_reset_cycles: 8
+  bagl_powerup_mode: random
+  bagl_powerup_seed: 2
   cleanup_enabled: True
 
 preconditions:
@@ -92,6 +94,12 @@ postconditions:
       )
       assert report['mode'] == 'bagl'
       assert report['sdf_requested']
+      assert report['powerup']['mode'] in {'random', 'x', 'zero', 'one'}
+      if report['powerup']['mode'] == 'random':
+          assert isinstance(report['powerup']['seed'], int)
+          assert report['powerup']['seed'] >= 2
+      else:
+          assert report['powerup']['seed'] is None
       assert report['sdf_error_count'] == 0
       assert report['top_sdf_annotation_completed']
       assert report['macro_sdf_expected_count'] == report['macro_sdf_annotated_count']
