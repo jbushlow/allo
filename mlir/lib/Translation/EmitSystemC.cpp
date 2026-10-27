@@ -764,13 +764,14 @@ char SystemCModuleEmitter::memPortArgDir(Value v) {  // new (SystemC-only)
   return isSeqStreamable(v) ? 0 : d; // streamable -> handled by the stream path
 }
 
-// A dataflow kernel's outermost bounded loop IS its steady-state loop: `for t in
-// range(NUM_IT)` runs one router/crossbar step per iteration. Emitted as a finite loop
-// followed by the terminal `while(1) wait();`, Catapult classifies EVERYTHING before
-// that while as RESET ACTION -- it never pipelines the body and the real steady-state
-// loop is a 1-cycle empty spin. Measured: whvcrouter 5 c-steps/iteration, arbxbar 17,
-// against MatchLib's II=1 `while(1){wait(); body;}`. Emitting this loop AS `while(1)`
-// under __SYNTHESIS__ gives Catapult MatchLib's shape.
+// A dataflow kernel's sole, terminal, stream-only bounded loop can be its steady-state
+// loop: `for t in range(NUM_IT)` runs one router/crossbar step per iteration. Emitted
+// as a finite loop followed by the terminal `while(1) wait();`, Catapult classifies
+// EVERYTHING before that while as RESET ACTION -- it never pipelines the body and the
+// real steady-state loop is a 1-cycle empty spin. Measured: whvcrouter 5
+// c-steps/iteration, arbxbar 17, against MatchLib's II=1
+// `while(1){wait(); body;}`. Emitting a loop that satisfies the conservative checks
+// below AS `while(1)` under __SYNTHESIS__ gives Catapult MatchLib's shape.
 //
 // State declarations already sit ABOVE this loop, so nothing moves. (An earlier attempt
 // wrapped while(1) around the declarations too -- that made every pass a cold restart
@@ -789,33 +790,34 @@ bool SystemCModuleEmitter::isSteadyStateLoop(affine::AffineForOp op) {  // new (
   // Constant trip count only; anything else keeps the ordinary path.
   if (!op.hasConstantBounds())
     return false;
-  // A kernel storing to a random-access MEMORY PORT must run ONCE: a free-running
-  // body would re-accumulate `C[i] += ...` on every pass. Only PORT arrays count --
-  // they arrive as function arguments (region boundary arrays routed to AlloMem).
-  // Stores to kernel-LOCAL arrays are the design's own state (buf/occ/cred/...); those
-  // are registers and are SUPPOSED to persist across steps, exactly as MatchLib's are.
-  // (Checking for any store at all disables the transform on every stateful kernel.)
-  bool storesToPort = false;
-  func.walk([&](Operation *o) {
-    Value target;
-    if (auto st = dyn_cast<memref::StoreOp>(o))
-      target = st.getMemRef();
-    else if (auto st = dyn_cast<affine::AffineStoreOp>(o))
-      target = st.getMemRef();
-    else
-      return;
-    // Chase through view-like ops to the root definition.
-    while (auto *def = target.getDefiningOp()) {
-      if (def->getNumOperands() == 0)
-        break;
-      if (!isa<memref::SubViewOp, memref::CastOp, memref::ReinterpretCastOp>(def))
-        break;
-      target = def->getOperand(0);
+  // Be deliberately conservative: this transform changes a finite loop into one
+  // that never exits. It is only safe when the loop is the kernel's sole top-level
+  // processing phase. In particular, initialization/prefill loops followed by a
+  // second loop must remain finite or the later phase becomes unreachable.
+  unsigned topLevelLoopCount = 0;
+  bool seenCandidate = false;
+  bool executableAfterCandidate = false;
+  for (Operation &bodyOp : func.getBody().front()) {
+    if (isa<affine::AffineForOp>(bodyOp))
+      ++topLevelLoopCount;
+    if (&bodyOp == op.getOperation()) {
+      seenCandidate = true;
+      continue;
     }
-    if (isa<BlockArgument>(target))
-      storesToPort = true;   // a func argument == a memory port
-  });
-  return !storesToPort;
+    if (seenCandidate && !isa<func::ReturnOp>(bodyOp))
+      executableAfterCandidate = true;
+  }
+  if (topLevelLoopCount != 1 || executableAfterCandidate)
+    return false;
+
+  // A kernel with an external array/memory argument has a finite transaction
+  // contract. Repeating it forever can duplicate reads/writes and prevents the
+  // region-level completion signal from describing one workload invocation.
+  for (BlockArgument argument : func.getArguments())
+    if (isa<MemRefType>(argument.getType()))
+      return false;
+
+  return true;
 }
 
 void SystemCModuleEmitter::emitAffineFor(affine::AffineForOp op) {  // override (base emitter)

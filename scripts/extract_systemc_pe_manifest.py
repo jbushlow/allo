@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import importlib.util
 import json
+import math
 import re
 import sys
 from pathlib import Path
@@ -117,6 +118,104 @@ def _synthesis_contract(project: Path) -> dict:
     return contract
 
 
+def _systemc_top_arguments(top_rtl: str, semantic_args: list[dict]) -> list[dict]:
+    """Describe the memory pin protocols realized by the SystemC Catapult path."""
+    declarations = {}
+    declaration_re = re.compile(
+        r"\b(input|output|inout)\s*(?:wire\s+|reg\s+)?"
+        r"(?:\[[^]]+\]\s*)?([A-Za-z_]\w*)\s*;"
+    )
+    for match in declaration_re.finditer(top_rtl):
+        declarations[match.group(2)] = {
+            "direction": match.group(1),
+            "width": CATAPULT._width(match.group(0)),
+        }
+
+    families = {}
+    for name, info in declarations.items():
+        match = re.fullmatch(r"(v\d+)_(radr|re|q|rrdy|wadr|d|we|wrdy)", name)
+        if match:
+            families.setdefault(match.group(1), {})[match.group(2)] = {
+                "name": name, **info
+            }
+    ordered = sorted(families, key=lambda name: int(name[1:]))
+    if len(ordered) != len(semantic_args):
+        raise RuntimeError(
+            "SystemC top argument count does not match realized RTL memory "
+            f"families: semantic={len(semantic_args)}, rtl={len(ordered)}"
+        )
+
+    results = []
+    for ordinal, (root, semantic) in enumerate(zip(ordered, semantic_args)):
+        ports = families[root]
+        direction = semantic.get("direction", "unknown")
+        if direction == "input":
+            suffix_roles = {
+                "radr": "read_address", "re": "read_enable",
+                "q": "read_data", "rrdy": "read_ready",
+            }
+            protocol = "systemc_sync_memory_read"
+            data_role = "read_data"
+            latency = 1
+        elif direction == "output":
+            suffix_roles = {
+                "wadr": "write_address", "we": "write_enable",
+                "d": "write_data", "wrdy": "write_ready",
+            }
+            protocol = "systemc_sync_memory_write"
+            data_role = "write_data"
+            latency = None
+        else:
+            raise RuntimeError(
+                f"unsupported SystemC top argument direction {direction!r} "
+                f"for {semantic.get('name', root)}"
+            )
+        if set(ports) != set(suffix_roles):
+            raise RuntimeError(
+                f"SystemC argument {semantic.get('name', root)!r} realized as "
+                f"{root} has ports {sorted(ports)}; expected {sorted(suffix_roles)}"
+            )
+        roles = {role: ports[suffix] for suffix, role in suffix_roles.items()}
+        shape = semantic.get("shape", [])
+        element_count = math.prod(shape) if shape else 1
+        element_bits = CATAPULT._type_width(semantic.get("type", ""))
+        address_width = roles[
+            "read_address" if direction == "input" else "write_address"
+        ]["width"]
+        data_width = roles[data_role]["width"]
+        if element_bits != data_width:
+            raise RuntimeError(
+                f"SystemC argument {semantic.get('name', root)!r} element width "
+                f"{element_bits} does not match realized RTL width {data_width}"
+            )
+        results.append({
+            **semantic,
+            "ordinal": ordinal,
+            "name": semantic.get("name", f"arg{ordinal}"),
+            "catapult_argument": root,
+            "semantic_direction": direction,
+            "rtl_direction": direction,
+            "interface_protocol": protocol,
+            "interface": {
+                "roles": roles,
+                "resource_root": root,
+                "matching": "exact_systemc_memory_pin_family",
+                "layout": "row_major",
+                "element_bits": element_bits,
+                "element_count": element_count,
+                "address_width": address_width,
+                "address_capacity": 1 << address_width,
+                "data_width": data_width,
+                "read_latency_cycles": latency,
+            },
+            "data_ports": list(ports.values()),
+            "triosy_ports": [],
+            "rtl_ports": list(ports.values()),
+            "packing": None,
+        })
+    return results
+
+
 def build_manifest(kernel_cpp: Path, pre_manifest: dict, rtl_path: Path, top: str):
     source = kernel_cpp.read_text(encoding="utf-8", errors="replace")
     functions = parse_systemc_modules(source)
@@ -190,8 +289,16 @@ def build_manifest(kernel_cpp: Path, pre_manifest: dict, rtl_path: Path, top: st
         "kind": "systemc_catapult_rtl",
         "self_contained": True,
     }
+    if top in modules:
+        merged["top_arguments"] = _systemc_top_arguments(
+            modules[top], pre_manifest.get("top_arguments", [])
+        )
     merged["top_interface"] = {
         "protocol": "systemc_connections",
+        "argument_protocols": sorted({
+            argument["interface_protocol"]
+            for argument in merged.get("top_arguments", [])
+        }),
         "clock": {"name": "clk", "edge": "rising", "period_ns": contract["clock_period_ns"]},
         "reset": {
             "name": "rst",
@@ -200,7 +307,7 @@ def build_manifest(kernel_cpp: Path, pre_manifest: dict, rtl_path: Path, top: st
             "evidence": "systemc_reset_signal_is_false",
         },
         "launch": "connections_handshake_after_reset_deassertion",
-        "completion": {"kind": "top_done", "active_level": 1},
+        "completion": {"kind": "top_done", "port": "done", "active_level": 1},
         "cycle_trace_available": False,
     }
     return merged
