@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Allo ASIC macro planning
 
 This node validates the enriched Allo ASIC manifest against normalized Verilog,

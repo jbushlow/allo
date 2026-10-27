@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Commercial RTL simulation
 
 Runs the normalized `design.v` with the packaged user testbench. The testbench

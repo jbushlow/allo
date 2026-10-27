@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 
 import argparse
 import os
@@ -65,7 +68,9 @@ def is_canonical_odb(path: Path) -> bool:
     return CANONICAL_ODB_RE.match(path.name) is not None
 
 
-def prune_intermediate_odbs(flow_dir: Path, platform: str, design: str, variant: str, dry_run: bool) -> None:
+def prune_intermediate_odbs(
+    flow_dir: Path, platform: str, design: str, variant: str, dry_run: bool
+) -> None:
     results_dir = flow_dir / "results" / platform / design / variant
 
     if not results_dir.exists():
@@ -104,7 +109,10 @@ def prune_intermediate_odbs(flow_dir: Path, platform: str, design: str, variant:
     print(f"[orfs-checkpoint] Deleted approximately: {human_size(deleted_bytes)}")
     print(f"[orfs-checkpoint] Size after pruning: {human_size(after)}")
 
-def prune_static_orfs_dirs(flow_dir: Path, platform: str, design: str, dry_run: bool) -> None:
+
+def prune_static_orfs_dirs(
+    flow_dir: Path, platform: str, design: str, dry_run: bool
+) -> None:
     """
     Remove bulky static ORFS collateral from the checkpoint while keeping the
     current design's config and RTL. This assumes later nodes restore by
@@ -132,13 +140,17 @@ def prune_static_orfs_dirs(flow_dir: Path, platform: str, design: str, dry_run: 
         tmp_platform_design.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(keep_design_platform, tmp_platform_design, symlinks=True)
     else:
-        print(f"[orfs-checkpoint] WARNING: missing expected design config dir: {keep_design_platform}")
+        print(
+            f"[orfs-checkpoint] WARNING: missing expected design config dir: {keep_design_platform}"
+        )
 
     if keep_design_src.exists():
         tmp_src_design.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(keep_design_src, tmp_src_design, symlinks=True)
     else:
-        print(f"[orfs-checkpoint] WARNING: missing expected design RTL dir: {keep_design_src}")
+        print(
+            f"[orfs-checkpoint] WARNING: missing expected design RTL dir: {keep_design_src}"
+        )
 
     for dirname in ["designs", "platforms"]:
         path = flow_dir / dirname
@@ -150,6 +162,7 @@ def prune_static_orfs_dirs(flow_dir: Path, platform: str, design: str, dry_run: 
         shutil.copytree(tmp_keep / "designs", flow_dir / "designs", symlinks=True)
 
     shutil.rmtree(tmp_keep, ignore_errors=True)
+
 
 def create_checkpoint(flow_dir: Path, checkpoint: Path, dry_run: bool) -> None:
     if not flow_dir.exists():
@@ -174,7 +187,9 @@ def create_checkpoint(flow_dir: Path, checkpoint: Path, dry_run: bool) -> None:
     )
 
     if not tmp_checkpoint.exists() or tmp_checkpoint.stat().st_size == 0:
-        raise RuntimeError(f"Checkpoint creation failed or produced empty file: {tmp_checkpoint}")
+        raise RuntimeError(
+            f"Checkpoint creation failed or produced empty file: {tmp_checkpoint}"
+        )
 
     tmp_checkpoint.replace(checkpoint)
 
@@ -187,7 +202,9 @@ def delete_flow_dir(flow_dir: Path, dry_run: bool) -> None:
         return
 
     print(f"[orfs-checkpoint] Deleting expanded flow directory: {flow_dir}")
-    print(f"[orfs-checkpoint] Reclaiming approximately: {human_size(dir_size(flow_dir))}")
+    print(
+        f"[orfs-checkpoint] Reclaiming approximately: {human_size(dir_size(flow_dir))}"
+    )
 
     if dry_run:
         print("[orfs-checkpoint] Dry run: not deleting flow directory")
@@ -236,8 +253,10 @@ def main() -> int:
             dry_run=args.dry_run,
         )
     else:
-        print(f"[orfs-checkpoint] Skipping static ORFS pruning because --prune-static={args.prune_static}")
-    
+        print(
+            f"[orfs-checkpoint] Skipping static ORFS pruning because --prune-static={args.prune_static}"
+        )
+
     create_checkpoint(
         flow_dir=flow_dir,
         checkpoint=checkpoint,
@@ -247,7 +266,9 @@ def main() -> int:
     if truthy(args.delete_flow):
         delete_flow_dir(flow_dir=flow_dir, dry_run=args.dry_run)
     else:
-        print(f"[orfs-checkpoint] Keeping expanded flow directory because --delete-flow={args.delete_flow}")
+        print(
+            f"[orfs-checkpoint] Keeping expanded flow directory because --delete-flow={args.delete_flow}"
+        )
 
     return 0
 

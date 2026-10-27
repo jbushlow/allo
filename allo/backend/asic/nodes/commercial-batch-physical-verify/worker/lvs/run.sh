@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 set -euo pipefail
 for supply_name in "$lvs_power_name" "$lvs_ground_name"; do
   if [[ ! "$supply_name" =~ ^[A-Za-z_][A-Za-z0-9_$]*$ ]]; then

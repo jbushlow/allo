@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Dependency-free tests for macro planning and port-name adaptation."""
 
 import importlib.util
@@ -38,9 +41,7 @@ endmodule
         }
         second_folding = {
             **first_folding,
-            "signature": [
-                {**first_folding["signature"][0], "root": "v99"}
-            ],
+            "signature": [{**first_folding["signature"][0], "root": "v99"}],
         }
         first_signature = PLAN.wrapper_interface_signature(
             first, "wrapper_a", first_folding
@@ -137,9 +138,7 @@ endmodule
                 }
             ],
         }
-        self.assertEqual(
-            PLAN.outer_module_for_member(pe, "pe_core"), "pe_wrapper"
-        )
+        self.assertEqual(PLAN.outer_module_for_member(pe, "pe_core"), "pe_wrapper")
 
     def test_writes_vitis_clock_constraints(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -161,9 +160,7 @@ endmodule
             PLAN.write_constraints(path, 8.0, "clk")
             constraints = path.read_text()
 
-        self.assertIn(
-            "create_clock -name clk -period 8 [get_ports clk]", constraints
-        )
+        self.assertIn("create_clock -name clk -period 8 [get_ports clk]", constraints)
         self.assertIn(
             "[remove_from_collection [all_inputs] [get_ports clk]]", constraints
         )
@@ -209,27 +206,44 @@ endmodule
                     "semantic_id": "top/compute/pid=0,0",
                     "kernel": "compute",
                     "pid": [0, 0],
-                    "ports": [{
-                        "ordinal": 0, "channel_id": "c0", "stream": "horizontal_0_1",
-                        "direction": "out", "type": "!allo.stream<i32, 1>",
-                    }],
+                    "ports": [
+                        {
+                            "ordinal": 0,
+                            "channel_id": "c0",
+                            "stream": "horizontal_0_1",
+                            "direction": "out",
+                            "type": "!allo.stream<i32, 1>",
+                        }
+                    ],
                     "post_hls_records": [
                         {"rtl_equivalence_hash": "representative-rtl"}
                     ],
                 },
                 {
                     "semantic_id": "top/compute/pid=0,1",
-                    "kernel": "compute", "pid": [0, 1], "ports": [],
+                    "kernel": "compute",
+                    "pid": [0, 1],
+                    "ports": [],
                 },
             ],
-            "channels": [{
-                "channel_id": "c0", "stream": "horizontal_0_1",
-                "endpoints": [
-                    {"pe": "top/compute/pid=0,0", "direction": "out",
-                     "accesses": [{"port_ordinal": 0}]},
-                    {"pe": "top/compute/pid=0,1", "direction": "in", "accesses": []},
-                ],
-            }],
+            "channels": [
+                {
+                    "channel_id": "c0",
+                    "stream": "horizontal_0_1",
+                    "endpoints": [
+                        {
+                            "pe": "top/compute/pid=0,0",
+                            "direction": "out",
+                            "accesses": [{"port_ordinal": 0}],
+                        },
+                        {
+                            "pe": "top/compute/pid=0,1",
+                            "direction": "in",
+                            "accesses": [],
+                        },
+                    ],
+                }
+            ],
         }
         wrapper, folding, connections = PLAN.generate_fifo_wrapper(
             "canonical_wrapper",
@@ -257,7 +271,9 @@ endmodule
             {"semantic_id": "top/compute/pid=0", "rtl_module": "pe_0"},
             {"semantic_id": "top/compute/pid=1", "rtl_module": "pe_1"},
         ]
-        self.assertEqual(PLAN.classify_macro_candidate(repeated), "repeated_hls_submodule")
+        self.assertEqual(
+            PLAN.classify_macro_candidate(repeated), "repeated_hls_submodule"
+        )
         self.assertEqual(PLAN.classify_macro_candidate(semantic), "semantic_pe")
 
     def test_systemc_fifo_wrapper_connects_dequeue_side_at_boundary(self):
@@ -276,38 +292,65 @@ module Connections_Fifo_ac_int_26_false_8U_Connections_SYN_PORT(); endmodule
 """
         blocks = PLAN.module_blocks(rtl)
         pe_instance = next(
-            item for item in PLAN.module_instances(blocks["top"], set(blocks))
+            item
+            for item in PLAN.module_instances(blocks["top"], set(blocks))
             if item.module == "pe"
         )
         semantic_id = "top/producer/pid=0"
         manifest = {
             "top": "top",
-            "pe_instances": [{
-                "semantic_id": semantic_id, "kernel": "producer", "pid": [0],
-                "ports": [{
-                    "ordinal": 0, "channel_id": "c0", "stream": "stream0",
-                    "direction": "out", "type": "!allo.stream<i26, 8>",
-                }],
-            }, {
-                "semantic_id": "top/consumer/pid=0", "kernel": "consumer",
-                "pid": [0], "ports": [],
-            }],
-            "channels": [{
-                "channel_id": "c0", "stream": "stream0",
-                "endpoints": [
-                    {"pe": semantic_id, "direction": "out",
-                     "accesses": [{"port_ordinal": 0}]},
-                    {"pe": "top/consumer/pid=0", "direction": "in", "accesses": []},
-                ],
-            }],
+            "pe_instances": [
+                {
+                    "semantic_id": semantic_id,
+                    "kernel": "producer",
+                    "pid": [0],
+                    "ports": [
+                        {
+                            "ordinal": 0,
+                            "channel_id": "c0",
+                            "stream": "stream0",
+                            "direction": "out",
+                            "type": "!allo.stream<i26, 8>",
+                        }
+                    ],
+                },
+                {
+                    "semantic_id": "top/consumer/pid=0",
+                    "kernel": "consumer",
+                    "pid": [0],
+                    "ports": [],
+                },
+            ],
+            "channels": [
+                {
+                    "channel_id": "c0",
+                    "stream": "stream0",
+                    "endpoints": [
+                        {
+                            "pe": semantic_id,
+                            "direction": "out",
+                            "accesses": [{"port_ordinal": 0}],
+                        },
+                        {"pe": "top/consumer/pid=0", "direction": "in", "accesses": []},
+                    ],
+                }
+            ],
         }
 
         wrapper, folding, connections = PLAN.generate_catapult_fifo_wrapper(
-            "canonical_wrapper", manifest["pe_instances"][0], blocks["pe"],
-            pe_instance, blocks["top"], manifest, blocks, "systemc",
+            "canonical_wrapper",
+            manifest["pe_instances"][0],
+            blocks["pe"],
+            pe_instance,
+            blocks["top"],
+            manifest,
+            blocks,
+            "systemc",
         )
 
-        self.assertIn("Connections_Fifo_ac_int_26_false_8U_Connections_SYN_PORT", wrapper)
+        self.assertIn(
+            "Connections_Fifo_ac_int_26_false_8U_Connections_SYN_PORT", wrapper
+        )
         self.assertEqual(folding["protocol"], "systemc_matchlib_ready_valid")
         self.assertEqual(folding["folded_fifo_count"], 1)
         self.assertEqual(connections["v0_dat"], "c_dat")
@@ -512,23 +555,57 @@ endmodule
                     "kernel": "k",
                     "pid": [0, 0],
                     "ports": [
-                        {"ordinal": 0, "channel_id": "h0", "stream": "horizontal_0_0", "direction": "in"},
-                        {"ordinal": 1, "channel_id": "v1", "stream": "vertical_1_0", "direction": "out"},
+                        {
+                            "ordinal": 0,
+                            "channel_id": "h0",
+                            "stream": "horizontal_0_0",
+                            "direction": "in",
+                        },
+                        {
+                            "ordinal": 1,
+                            "channel_id": "v1",
+                            "stream": "vertical_1_0",
+                            "direction": "out",
+                        },
                     ],
                     "post_hls_records": [],
                 },
-                {"semantic_id": "r/k/pid=0,-1", "kernel": "k", "pid": [0, -1], "ports": []},
-                {"semantic_id": "r/k/pid=1,0", "kernel": "k", "pid": [1, 0], "ports": []},
+                {
+                    "semantic_id": "r/k/pid=0,-1",
+                    "kernel": "k",
+                    "pid": [0, -1],
+                    "ports": [],
+                },
+                {
+                    "semantic_id": "r/k/pid=1,0",
+                    "kernel": "k",
+                    "pid": [1, 0],
+                    "ports": [],
+                },
             ],
             "channels": [
-                {"stream": "horizontal_0_0", "endpoints": [
-                    {"pe": "r/k/pid=0,-1", "direction": "out", "accesses": []},
-                    {"pe": "r/k/pid=0,0", "direction": "in", "accesses": [{"port_ordinal": 0}]},
-                ]},
-                {"stream": "vertical_1_0", "endpoints": [
-                    {"pe": "r/k/pid=0,0", "direction": "out", "accesses": [{"port_ordinal": 1}]},
-                    {"pe": "r/k/pid=1,0", "direction": "in", "accesses": []},
-                ]},
+                {
+                    "stream": "horizontal_0_0",
+                    "endpoints": [
+                        {"pe": "r/k/pid=0,-1", "direction": "out", "accesses": []},
+                        {
+                            "pe": "r/k/pid=0,0",
+                            "direction": "in",
+                            "accesses": [{"port_ordinal": 0}],
+                        },
+                    ],
+                },
+                {
+                    "stream": "vertical_1_0",
+                    "endpoints": [
+                        {
+                            "pe": "r/k/pid=0,0",
+                            "direction": "out",
+                            "accesses": [{"port_ordinal": 1}],
+                        },
+                        {"pe": "r/k/pid=1,0", "direction": "in", "accesses": []},
+                    ],
+                },
             ],
         }
         intent = PLAN.build_pin_intent(manifest, "r/k/pid=0,0", block)
@@ -545,12 +622,8 @@ endmodule
             PLAN.write_pin_intent_tcl(output, intent)
             emitted = output.read_text()
             self.assertIn("allo_asic_signal_pin_groups_W", emitted)
-            self.assertIn(
-                "[list {west_dout} {west_empty_n} {west_read}]", emitted
-            )
-            self.assertIn(
-                "set allo_asic_clock_pins [list {ap_clk}]", emitted
-            )
+            self.assertIn("[list {west_dout} {west_empty_n} {west_read}]", emitted)
+            self.assertIn("set allo_asic_clock_pins [list {ap_clk}]", emitted)
         rotated = json.loads(json.dumps(intent))
         rotated["stream_bundles"][0]["side"] = "S"
         rotated["stream_bundles"][1]["side"] = "E"
@@ -576,20 +649,27 @@ endmodule
             for ordinal in range(4)
         ]
         manifest = {
-            "pe_instances": [{
-                "semantic_id": representative,
-                "kernel": "compute",
-                "pid": [3, 4],
-                "ports": ports,
-            }],
-            "channels": [{
-                "stream": port["stream"],
-                "endpoints": [{
-                    "pe": representative,
-                    "direction": "out",
-                    "accesses": [{"port_ordinal": port["ordinal"]}],
-                }],
-            } for port in ports],
+            "pe_instances": [
+                {
+                    "semantic_id": representative,
+                    "kernel": "compute",
+                    "pid": [3, 4],
+                    "ports": ports,
+                }
+            ],
+            "channels": [
+                {
+                    "stream": port["stream"],
+                    "endpoints": [
+                        {
+                            "pe": representative,
+                            "direction": "out",
+                            "accesses": [{"port_ordinal": port["ordinal"]}],
+                        }
+                    ],
+                }
+                for port in ports
+            ],
         }
 
         decisions = PLAN.graph_pin_sides(manifest)
@@ -611,20 +691,25 @@ endmodule
         relocated_decisions = PLAN.graph_pin_sides(relocated)
         self.assertEqual(
             [decisions[(representative, ordinal)]["side"] for ordinal in range(4)],
-            [relocated_decisions[(relocated_id, ordinal)]["side"] for ordinal in range(4)],
+            [
+                relocated_decisions[(relocated_id, ordinal)]["side"]
+                for ordinal in range(4)
+            ],
         )
 
         intent = {
-            "stream_bundles": [{
-                "method": "non_neighbor_load_balance",
-                "side": "E",
-                "rtl_ports": ["result_dout", "result_empty_n", "result_read"],
-                "rtl_port_widths": {
-                    "result_dout": 37,
-                    "result_empty_n": 1,
-                    "result_read": 1,
-                },
-            }],
+            "stream_bundles": [
+                {
+                    "method": "non_neighbor_load_balance",
+                    "side": "E",
+                    "rtl_ports": ["result_dout", "result_empty_n", "result_read"],
+                    "rtl_port_widths": {
+                        "result_dout": 37,
+                        "result_empty_n": 1,
+                        "result_read": 1,
+                    },
+                }
+            ],
             "clock_pins": [],
             "clock_side": "N",
             "control_pins": [],
@@ -640,9 +725,7 @@ endmodule
                 "[list {result_dout} 37 [list {result_empty_n} {result_read}]]",
                 emitted,
             )
-            self.assertNotIn(
-                "allo_asic_signal_pins_E [list {result_dout}", emitted
-            )
+            self.assertNotIn("allo_asic_signal_pins_E [list {result_dout}", emitted)
 
     def test_keeps_immediate_neighbor_direction_ahead_of_balancing(self):
         manifest = {
@@ -651,13 +734,15 @@ endmodule
                     "semantic_id": "r/k/pid=0,0",
                     "kernel": "k",
                     "pid": [0, 0],
-                    "ports": [{
-                        "ordinal": 0,
-                        "channel_id": "local",
-                        "stream": "local",
-                        "direction": "out",
-                        "type": "!allo.stream<i32, 1>",
-                    }],
+                    "ports": [
+                        {
+                            "ordinal": 0,
+                            "channel_id": "local",
+                            "stream": "local",
+                            "direction": "out",
+                            "type": "!allo.stream<i32, 1>",
+                        }
+                    ],
                 },
                 {
                     "semantic_id": "r/k/pid=0,1",
@@ -666,21 +751,23 @@ endmodule
                     "ports": [],
                 },
             ],
-            "channels": [{
-                "stream": "local",
-                "endpoints": [
-                    {
-                        "pe": "r/k/pid=0,0",
-                        "direction": "out",
-                        "accesses": [{"port_ordinal": 0}],
-                    },
-                    {
-                        "pe": "r/k/pid=0,1",
-                        "direction": "in",
-                        "accesses": [],
-                    },
-                ],
-            }],
+            "channels": [
+                {
+                    "stream": "local",
+                    "endpoints": [
+                        {
+                            "pe": "r/k/pid=0,0",
+                            "direction": "out",
+                            "accesses": [{"port_ordinal": 0}],
+                        },
+                        {
+                            "pe": "r/k/pid=0,1",
+                            "direction": "in",
+                            "accesses": [],
+                        },
+                    ],
+                }
+            ],
         }
         decision = PLAN.graph_pin_sides(manifest)[("r/k/pid=0,0", 0)]
         self.assertEqual(decision, {"side": "E", "method": "same_kernel_neighbor"})
@@ -850,21 +937,28 @@ endmodule
             for ordinal in range(4)
         ]
         manifest = {
-            "pe_instances": [{
-                "semantic_id": representative,
-                "kernel": "consume_c",
-                "pid": [0],
-                "ports": ports,
-                "post_hls_records": [],
-            }],
-            "channels": [{
-                "stream": port["stream"],
-                "endpoints": [{
-                    "pe": representative,
-                    "direction": "in",
-                    "accesses": [{"port_ordinal": port["ordinal"]}],
-                }],
-            } for port in ports],
+            "pe_instances": [
+                {
+                    "semantic_id": representative,
+                    "kernel": "consume_c",
+                    "pid": [0],
+                    "ports": ports,
+                    "post_hls_records": [],
+                }
+            ],
+            "channels": [
+                {
+                    "stream": port["stream"],
+                    "endpoints": [
+                        {
+                            "pe": representative,
+                            "direction": "in",
+                            "accesses": [{"port_ordinal": port["ordinal"]}],
+                        }
+                    ],
+                }
+                for port in ports
+            ],
         }
 
         intent = PLAN.build_pin_intent(manifest, representative, block)
@@ -878,9 +972,7 @@ endmodule
             "ordered_direction_width_rtl_subset",
         )
         self.assertTrue(
-            {"v82_dout", "v82_empty_n", "v82_read"}.issubset(
-                intent["auxiliary_pins"]
-            )
+            {"v82_dout", "v82_empty_n", "v82_read"}.issubset(intent["auxiliary_pins"])
         )
 
     def test_maps_reordered_split_process_through_parent_bundle_identity(self):
@@ -930,24 +1022,33 @@ endmodule
             for ordinal, (direction, width) in enumerate(zip(directions, widths))
         ]
         manifest = {
-            "pe_instances": [{
-                "semantic_id": representative,
-                "kernel": "vpu_lane",
-                "pid": [0],
-                "ports": ports,
-                "post_hls_records": [{
-                    "rtl_modules": [{"name": "pe_pipeline"}],
-                    "rtl_instances": [{"parent_file": "/tmp/pe_parent.v"}],
-                }],
-            }],
-            "channels": [{
-                "stream": port["stream"],
-                "endpoints": [{
-                    "pe": representative,
-                    "direction": port["direction"],
-                    "accesses": [{"port_ordinal": port["ordinal"]}],
-                }],
-            } for port in ports],
+            "pe_instances": [
+                {
+                    "semantic_id": representative,
+                    "kernel": "vpu_lane",
+                    "pid": [0],
+                    "ports": ports,
+                    "post_hls_records": [
+                        {
+                            "rtl_modules": [{"name": "pe_pipeline"}],
+                            "rtl_instances": [{"parent_file": "/tmp/pe_parent.v"}],
+                        }
+                    ],
+                }
+            ],
+            "channels": [
+                {
+                    "stream": port["stream"],
+                    "endpoints": [
+                        {
+                            "pe": representative,
+                            "direction": port["direction"],
+                            "accesses": [{"port_ordinal": port["ordinal"]}],
+                        }
+                    ],
+                }
+                for port in ports
+            ],
         }
 
         intent = PLAN.build_pin_intent(

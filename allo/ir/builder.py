@@ -2042,9 +2042,7 @@ class ASTTransformer(ASTBuilder):
                 get_global_op.attributes["unsigned"] = UnitAttr.get()
             # the variable's name, so `s.partition("k:mem")` finds it (`name`
             # is the symbol attribute of memref.get_global itself)
-            get_global_op.attributes["stateful_name"] = StringAttr.get(
-                node.target.id
-            )
+            get_global_op.attributes["stateful_name"] = StringAttr.get(node.target.id)
 
             # Store in context
             ctx.buffers[node.target.id] = get_global_op
@@ -3620,7 +3618,9 @@ class ASTTransformer(ASTBuilder):
                         if n not in (obj.sc_rst, obj.sc_clk)
                     ]
                     if recs:
-                        call_op.attributes["sc_scalars"] = StringAttr.get(";".join(recs))
+                        call_op.attributes["sc_scalars"] = StringAttr.get(
+                            ";".join(recs)
+                        )
                 for idx, (call_operand, operand_op) in enumerate(
                     zip(call_operands, new_args)
                 ):

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Collect explicit full-chip PNR runtime and physical-complexity metrics."""
 
 from __future__ import annotations
@@ -46,7 +49,9 @@ def collect(
                 stages[fields[0]] = float(fields[1])
 
     preplace_summary = (reports / "preplace.summary").read_text(errors="replace")
-    summary_name = "signoff.summary" if stop_after_step == "none" else f"{stop_after_step}.summary"
+    summary_name = (
+        "signoff.summary" if stop_after_step == "none" else f"{stop_after_step}.summary"
+    )
     final_summary = (reports / summary_name).read_text(errors="replace")
     intent = (reports / "physical-intent-placement.rpt").read_text(errors="replace")
     antenna_path = reports / "innovus-antenna.rpt"
@@ -65,8 +70,10 @@ def collect(
     if peak_memory is None:
         peak_memory = last_number(r"peak mem:\s*([0-9.]+)M", log)
 
-    antenna_status = "not_run" if stop_after_step != "none" else (
-        "skipped" if "skipped by antenna_check_policy" in antenna else "passed"
+    antenna_status = (
+        "not_run"
+        if stop_after_step != "none"
+        else ("skipped" if "skipped by antenna_check_policy" in antenna else "passed")
     )
     if "ERROR:" in antenna:
         antenna_status = "error"
@@ -93,10 +100,24 @@ def collect(
         "wall_seconds": wall_seconds,
         "stage_wall_seconds": stages,
         "placement": {
-            "initial_density_percent": last_number(r"Density:\s*([0-9.]+)%", preplace_summary),
-            "final_density_percent": last_number(r"Density:\s*([0-9.]+)%", final_summary),
-            "instance_count": int(value) if (value := last_number(r"Total instances in design:\s*(\d+)", log)) is not None else None,
-            "hard_macro_count": int(value) if (value := last_number(r"placed_hard_macros\s+(\d+)", intent)) is not None else None,
+            "initial_density_percent": last_number(
+                r"Density:\s*([0-9.]+)%", preplace_summary
+            ),
+            "final_density_percent": last_number(
+                r"Density:\s*([0-9.]+)%", final_summary
+            ),
+            "instance_count": (
+                int(value)
+                if (value := last_number(r"Total instances in design:\s*(\d+)", log))
+                is not None
+                else None
+            ),
+            "hard_macro_count": (
+                int(value)
+                if (value := last_number(r"placed_hard_macros\s+(\d+)", intent))
+                is not None
+                else None
+            ),
         },
         "routing": {
             "overflow_horizontal_percent": float(overflow[-1][0]) if overflow else None,
@@ -115,10 +136,13 @@ def collect(
         "drc": {
             "policy": drc_check_policy,
             "status": (
-                "not_run" if stop_after_step != "none" else
-                "clean" if drc_count == 0 else
-                "violations" if drc_count is not None else
-                "unavailable"
+                "not_run"
+                if stop_after_step != "none"
+                else (
+                    "clean"
+                    if drc_count == 0
+                    else "violations" if drc_count is not None else "unavailable"
+                )
             ),
             "violation_count": drc_count,
         },
@@ -131,18 +155,24 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--wall-seconds", required=True, type=float)
     parser.add_argument("--stop-after-step", default="none")
-    parser.add_argument("--drc-check-policy", choices=("error", "report"), default="error")
+    parser.add_argument(
+        "--drc-check-policy", choices=("error", "report"), default="error"
+    )
     parser.add_argument("--hold-target-slack", type=float, default=0.15)
     parser.add_argument("--output", default="outputs/full-chip-pnr-metrics.json")
     args = parser.parse_args()
     Path(args.output).write_text(
         json.dumps(
             collect(
-                Path("."), args.wall_seconds, args.stop_after_step,
-                args.drc_check_policy, args.hold_target_slack,
+                Path("."),
+                args.wall_seconds,
+                args.stop_after_step,
+                args.drc_check_policy,
+                args.hold_target_slack,
             ),
             indent=2,
-        ) + "\n"
+        )
+        + "\n"
     )
 
 

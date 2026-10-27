@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Run one isolated Innovus macro-hardening worker per synthesized class."""
 
 from __future__ import annotations
@@ -26,9 +29,7 @@ def macro_routing_layer_environment(highest_layer: str) -> dict[str, str]:
     try:
         highest = int(highest_layer)
     except (TypeError, ValueError) as error:
-        raise ValueError(
-            "highest_macro_routing_layer must be an integer"
-        ) from error
+        raise ValueError("highest_macro_routing_layer must be an integer") from error
     if highest < 2:
         raise ValueError(
             "highest_macro_routing_layer must be at least 2 so the power "
@@ -102,7 +103,9 @@ def run_entry(entry: dict) -> dict:
         "pin-intent JSON": INPUT_BATCH / entry["pin_intent"],
     }
     missing_inputs = [
-        f"{label}: {path}" for label, path in required_inputs.items() if not path.is_file()
+        f"{label}: {path}"
+        for label, path in required_inputs.items()
+        if not path.is_file()
     ]
     if missing_inputs:
         raise FileNotFoundError(
@@ -248,22 +251,49 @@ def main() -> None:
     WORK_ROOT.mkdir()
     if not entries:
         output_index = {
-            **{key: value for key, value in index.items() if key not in {"entries", "status"}},
-            "stage": "pnr", "entries": [], "status": [],
+            **{
+                key: value
+                for key, value in index.items()
+                if key not in {"entries", "status"}
+            },
+            "stage": "pnr",
+            "entries": [],
+            "status": [],
         }
-        (OUTPUT_BATCH / "index.json").write_text(json.dumps(output_index, indent=2) + "\n")
-        status_doc = {"status": "bypassed", "total": 0, "passed": 0, "failed": 0, "entries": []}
-        (ROOT / "outputs" / "pnr-status.json").write_text(json.dumps(status_doc, indent=2) + "\n")
+        (OUTPUT_BATCH / "index.json").write_text(
+            json.dumps(output_index, indent=2) + "\n"
+        )
+        status_doc = {
+            "status": "bypassed",
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "entries": [],
+        }
+        (ROOT / "outputs" / "pnr-status.json").write_text(
+            json.dumps(status_doc, indent=2) + "\n"
+        )
         metrics = {
-            "schema_version": 1, "node": "commercial-macro-pnr", "status": "bypassed",
-            "wall_seconds": round(time.monotonic() - batch_start, 3), "workers": [],
-            "aggregate": {"worker_count": 0, "maximum_worker_seconds": 0.0, "sum_worker_seconds": 0.0},
+            "schema_version": 1,
+            "node": "commercial-macro-pnr",
+            "status": "bypassed",
+            "wall_seconds": round(time.monotonic() - batch_start, 3),
+            "workers": [],
+            "aggregate": {
+                "worker_count": 0,
+                "maximum_worker_seconds": 0.0,
+                "sum_worker_seconds": 0.0,
+            },
         }
-        (ROOT / "outputs" / "macro-pnr-metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+        (ROOT / "outputs" / "macro-pnr-metrics.json").write_text(
+            json.dumps(metrics, indent=2) + "\n"
+        )
         print("Macro PNR bypassed: batch contains zero entries.")
         return
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(entries)) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(entries)
+        ) as executor:
             statuses = list(executor.map(run_entry, entries))
     finally:
         emit_worker_logs(entries)
@@ -274,7 +304,11 @@ def main() -> None:
         if entry["id"] in passed
     ]
     output_index = {
-        **{key: value for key, value in index.items() if key not in {"entries", "status"}},
+        **{
+            key: value
+            for key, value in index.items()
+            if key not in {"entries", "status"}
+        },
         "stage": "pnr",
         "entries": output_entries,
         "status": statuses,

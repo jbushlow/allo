@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Fixed 4x4 systolic GEMM for the SystemC/Catapult ASIC example."""
 
 from pathlib import Path

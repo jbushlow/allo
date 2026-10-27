@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 from prepare_pt_sdc import prepare_sdc
 
 
@@ -7,11 +10,14 @@ create_clock [get_ports clk] -period 10
 set_input_delay -add_delay 0 -clock [get_clocks clk] [get_ports data]
 set_output_delay 0 -clock [get_clocks clk] [get_ports result]
 """
-    assert prepare_sdc(source) == """\
+    assert (
+        prepare_sdc(source)
+        == """\
 create_clock [get_ports clk] -period 10
 set_input_delay -source_latency_included -add_delay 0 -clock [get_clocks clk] [get_ports data]
 set_output_delay 0 -clock [get_clocks clk] [get_ports result]
 """
+    )
 
 
 def test_is_idempotent_and_preserves_indentation():

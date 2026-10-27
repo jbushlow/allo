@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import json
 import os
 import subprocess
@@ -9,10 +12,14 @@ SCRIPT = Path(__file__).with_name("collect_testbench.py")
 
 def base_environment(construct, testbench):
     return os.environ | {
-        "construct_path": str(construct), "testbench_path": str(testbench),
-        "testbench_top": "ChipTb", "dut_instance": "dut",
-        "testbench_include_dirs": ".", "testbench_defines": "ASIC_SIM=1",
-        "pass_marker": "TEST_PASS", "failure_marker": "TEST_FAIL",
+        "construct_path": str(construct),
+        "testbench_path": str(testbench),
+        "testbench_top": "ChipTb",
+        "dut_instance": "dut",
+        "testbench_include_dirs": ".",
+        "testbench_defines": "ASIC_SIM=1",
+        "pass_marker": "TEST_PASS",
+        "failure_marker": "TEST_FAIL",
         "simulation_timeout_seconds": "120",
     }
 
@@ -28,7 +35,8 @@ def test_simple_mode_packages_neighbors_but_compiles_only_main(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     env = base_environment(construct, testbench) | {
-        "testbench_file": "ChipTb.sv", "testbench_manifest": "",
+        "testbench_file": "ChipTb.sv",
+        "testbench_manifest": "",
         "simulation_args_file": "",
     }
     subprocess.run(["python3", str(SCRIPT)], cwd=work, env=env, check=True)
@@ -57,7 +65,8 @@ def test_manifest_controls_compile_order_and_data(tmp_path):
     work = tmp_path / "work"
     work.mkdir()
     env = base_environment(construct, testbench) | {
-        "testbench_file": "undefined", "testbench_manifest": str(manifest),
+        "testbench_file": "undefined",
+        "testbench_manifest": str(manifest),
         "simulation_args_file": "",
     }
     subprocess.run(["python3", str(SCRIPT)], cwd=work, env=env, check=True)
@@ -79,10 +88,15 @@ def test_upstream_design_args_remain_compile_arguments(tmp_path):
     (work / "inputs/testbench.sv").write_text("module ChipTb; endmodule\n")
     (work / "inputs/design.args").write_text("-debug_access+pp -sverilog\n")
     env = base_environment(construct, testbench) | {
-        "consume_upstream_testbench": "True", "testbench_file": "undefined",
-        "testbench_manifest": "", "simulation_args_file": "",
+        "consume_upstream_testbench": "True",
+        "testbench_file": "undefined",
+        "testbench_manifest": "",
+        "simulation_args_file": "",
     }
     subprocess.run(["python3", str(SCRIPT)], cwd=work, env=env, check=True)
     package = work / "outputs/testbench"
-    assert package.joinpath("testbench-compile.args").read_text() == "-debug_access+pp -sverilog\n"
+    assert (
+        package.joinpath("testbench-compile.args").read_text()
+        == "-debug_access+pp -sverilog\n"
+    )
     assert package.joinpath("testbench-runtime.args").read_text() == ""

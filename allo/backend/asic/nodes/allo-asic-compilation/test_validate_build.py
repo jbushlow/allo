@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Contract tests for compiler-manifest/workload validation."""
 
 import json
@@ -78,28 +81,37 @@ def test_validate_workload_interface_accepts_systemc_memory(tmp_path: Path):
     final, workload, vectors = _contract(tmp_path)
     for argument in final["top_arguments"]:
         argument["interface_protocol"] = (
-            "systemc_sync_memory_read" if argument["name"] == "a"
+            "systemc_sync_memory_read"
+            if argument["name"] == "a"
             else "systemc_sync_memory_write"
         )
         argument["semantic_direction"] = argument["rtl_direction"]
         argument["packing"] = None
         argument["interface"] = {
-            "element_bits": 16, "data_width": 16,
-            "element_count": 2, "address_capacity": 4,
+            "element_bits": 16,
+            "data_width": 16,
+            "element_count": 2,
+            "address_capacity": 4,
         }
     validate_workload_interface(final, workload, vectors)
 
 
-def test_validate_workload_interface_rejects_insufficient_memory_address_width(tmp_path: Path):
+def test_validate_workload_interface_rejects_insufficient_memory_address_width(
+    tmp_path: Path,
+):
     final, workload, vectors = _contract(tmp_path)
     argument = final["top_arguments"][0]
-    argument.update({
-        "interface_protocol": "systemc_sync_memory_read",
-        "packing": None,
-        "interface": {
-            "element_bits": 16, "data_width": 16,
-            "element_count": 2, "address_capacity": 1,
-        },
-    })
+    argument.update(
+        {
+            "interface_protocol": "systemc_sync_memory_read",
+            "packing": None,
+            "interface": {
+                "element_bits": 16,
+                "data_width": 16,
+                "element_count": 2,
+                "address_capacity": 1,
+            },
+        }
+    )
     with pytest.raises(RuntimeError, match="address capacity"):
         validate_workload_interface(final, workload, vectors)

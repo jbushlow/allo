@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Replace selected PE instances with canonical hardened-macro interfaces."""
 
 from __future__ import annotations
@@ -80,7 +83,9 @@ def closing_parenthesis(text: str, opening: int) -> int:
     raise ValueError("unterminated instance port list")
 
 
-def rewrite_instances(body: str, replacement_by_module: dict[str, dict]) -> tuple[str, list[dict]]:
+def rewrite_instances(
+    body: str, replacement_by_module: dict[str, dict]
+) -> tuple[str, list[dict]]:
     candidates = sorted(replacement_by_module, key=len, reverse=True)
     if not candidates:
         return body, []
@@ -251,7 +256,8 @@ def main() -> None:
         existing = replacement_by_module.get(source_module)
         if existing is not None and (
             existing["canonical_module"] != item["canonical_module"]
-            or existing["member_to_canonical_ports"] != item["member_to_canonical_ports"]
+            or existing["member_to_canonical_ports"]
+            != item["member_to_canonical_ports"]
         ):
             raise ValueError(f"inconsistent replacement records for {source_module}")
         replacement_by_module[source_module] = item
@@ -301,11 +307,11 @@ def main() -> None:
         )
     surviving = {item["name"] for item in module_blocks(assembled)}
     if surviving & removed:
-        raise ValueError(f"replaced definitions survived assembly: {sorted(surviving & removed)}")
+        raise ValueError(
+            f"replaced definitions survived assembly: {sorted(surviving & removed)}"
+        )
     (outputs / "assembled-design.v").write_text(assembled)
-    assembled_blocks = {
-        item["name"]: item["text"] for item in module_blocks(assembled)
-    }
+    assembled_blocks = {item["name"]: item["text"] for item in module_blocks(assembled)}
     top_module = plan["top_module"]
     if top_module not in assembled_blocks:
         raise ValueError(f"assembled RTL does not define top module {top_module!r}")
@@ -353,12 +359,8 @@ def main() -> None:
         "top_module": plan["top_module"],
         "backend": backend,
         "clock_port": clock_port,
-        "bypass_macro_generation": bool(
-            plan.get("bypass_macro_generation", False)
-        ),
-        "implementation_style": plan.get(
-            "implementation_style", "hierarchical_macros"
-        ),
+        "bypass_macro_generation": bool(plan.get("bypass_macro_generation", False)),
+        "implementation_style": plan.get("implementation_style", "hierarchical_macros"),
         "macro_classes": collateral_classes,
         "removed_module_definitions": sorted(removed),
         "rewritten_instances": rewritten,
@@ -368,7 +370,9 @@ def main() -> None:
             "macro-interface-stubs.v as an implementation"
         ),
     }
-    (outputs / "macro-collateral.json").write_text(json.dumps(collateral, indent=2) + "\n")
+    (outputs / "macro-collateral.json").write_text(
+        json.dumps(collateral, indent=2) + "\n"
+    )
     db_paths = []
     lib_paths = []
     lef_paths = []
@@ -389,11 +393,21 @@ def main() -> None:
         "set allo_asic_macro_modules [list "
         + " ".join(tcl_quote(item["canonical_module"]) for item in collateral_classes)
         + "]",
-        "set allo_asic_macro_db_files [list " + " ".join(tcl_quote(x) for x in db_paths) + "]",
-        "set allo_asic_macro_lib_files [list " + " ".join(tcl_quote(x) for x in lib_paths) + "]",
-        "set allo_asic_macro_lef_files [list " + " ".join(tcl_quote(x) for x in lef_paths) + "]",
-        "set allo_asic_macro_gds_files [list " + " ".join(tcl_quote(x) for x in gds_paths) + "]",
-        "set allo_asic_macro_verilog_files [list " + " ".join(tcl_quote(x) for x in verilog_paths) + "]",
+        "set allo_asic_macro_db_files [list "
+        + " ".join(tcl_quote(x) for x in db_paths)
+        + "]",
+        "set allo_asic_macro_lib_files [list "
+        + " ".join(tcl_quote(x) for x in lib_paths)
+        + "]",
+        "set allo_asic_macro_lef_files [list "
+        + " ".join(tcl_quote(x) for x in lef_paths)
+        + "]",
+        "set allo_asic_macro_gds_files [list "
+        + " ".join(tcl_quote(x) for x in gds_paths)
+        + "]",
+        "set allo_asic_macro_verilog_files [list "
+        + " ".join(tcl_quote(x) for x in verilog_paths)
+        + "]",
     ]
     (outputs / "macro-collateral.tcl").write_text("\n".join(tcl) + "\n")
     (outputs / "macro-functional-models.f").write_text("\n".join(verilog_paths) + "\n")

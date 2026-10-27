@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # TinyTPU-isa through standard-cell synthesis
 
 Design Compiler synthesis of the Vitis-generated Verilog, on FreePDK45/NanGate

@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Commercial batch macro power
 
 This node reuses the standard `synopsys-pt-power` scripts for one representative

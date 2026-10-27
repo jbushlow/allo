@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # ASIC evaluation handoff — state at the credit limit
 
 > Historical handoff: the flat RTL nodes referenced below now live under

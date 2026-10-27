@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """End-to-end test of planning and canonical RTL substitution."""
 
 import importlib.util
@@ -29,10 +32,12 @@ endmodule
 """
     updated, removed = ASSEMBLER.remove_instances(
         rtl,
-        [{
-            "fifo_module": "Connections_Fifo_ac_int_8_false_4U_Connections_SYN_PORT",
-            "fifo_instance": "fifo0",
-        }],
+        [
+            {
+                "fifo_module": "Connections_Fifo_ac_int_8_false_4U_Connections_SYN_PORT",
+                "fifo_instance": "fifo0",
+            }
+        ],
     )
     assert "fifo0" not in updated
     assert len(removed) == 1
@@ -64,8 +69,16 @@ module member_b(b, y);
 endmodule
 """
     members = [
-        {"semantic_id": "top/k/pid=0", "rtl_module": "canonical", "orientation": "unassigned"},
-        {"semantic_id": "top/k/pid=1", "rtl_module": "member_b", "orientation": "unassigned"},
+        {
+            "semantic_id": "top/k/pid=0",
+            "rtl_module": "canonical",
+            "orientation": "unassigned",
+        },
+        {
+            "semantic_id": "top/k/pid=1",
+            "rtl_module": "member_b",
+            "orientation": "unassigned",
+        },
     ]
     manifest = {
         "top": "top",
@@ -76,21 +89,38 @@ endmodule
         "channels": [],
         "macro_groups": [{"macro_class_id": "macro_alpha_test", "members": members}],
     }
-    view_names = {"verilog": "macro.v", "liberty": "macro.lib", "db": "macro.db", "lef": "macro.lef", "gds": "macro.gds"}
-    views = {name: {"path": f"macro_alpha_test/{filename}"} for name, filename in view_names.items()}
+    view_names = {
+        "verilog": "macro.v",
+        "liberty": "macro.lib",
+        "db": "macro.db",
+        "lef": "macro.lef",
+        "gds": "macro.gds",
+    }
+    views = {
+        name: {"path": f"macro_alpha_test/{filename}"}
+        for name, filename in view_names.items()
+    }
     registry = {
-        "macros": [{
-            "macro_class_id": "macro_alpha_test",
-            "top_module": "canonical",
-            "reuse_count": 2,
-            "members": members,
-            "lef_symmetry": ["X", "Y", "R90"],
-            "views": views,
-            "port_maps": {
-                "canonical": [{"canonical": "a", "member": "a"}, {"canonical": "z", "member": "z"}],
-                "member_b": [{"canonical": "a", "member": "b"}, {"canonical": "z", "member": "y"}],
-            },
-        }]
+        "macros": [
+            {
+                "macro_class_id": "macro_alpha_test",
+                "top_module": "canonical",
+                "reuse_count": 2,
+                "members": members,
+                "lef_symmetry": ["X", "Y", "R90"],
+                "views": views,
+                "port_maps": {
+                    "canonical": [
+                        {"canonical": "a", "member": "a"},
+                        {"canonical": "z", "member": "z"},
+                    ],
+                    "member_b": [
+                        {"canonical": "a", "member": "b"},
+                        {"canonical": "z", "member": "y"},
+                    ],
+                },
+            }
+        ]
     }
 
     planner_dir = tmp_path / "planner"
@@ -100,14 +130,18 @@ endmodule
     (planner_inputs / "asic-manifest-final.json").write_text(json.dumps(manifest))
     (planner_inputs / "macro-registry.json").write_text(json.dumps(registry))
     for filename in view_names.values():
-        (planner_inputs / "macro-registry" / "macro_alpha_test" / filename).write_text("view\n")
+        (planner_inputs / "macro-registry" / "macro_alpha_test" / filename).write_text(
+            "view\n"
+        )
     monkeypatch.chdir(planner_dir)
     PLANNER.main()
     plan = json.loads((planner_dir / "outputs/assembly-plan.json").read_text())
     assert plan["backend"] == "vitis"
     assert plan["replacement_instance_count"] == 2
     assert plan["elaborated_macro_instance_count"] == 2
-    assert {path for item in plan["replacements"] for path in item["hierarchical_paths"]} == {
+    assert {
+        path for item in plan["replacements"] for path in item["hierarchical_paths"]
+    } == {
         "top/wa/u_a",
         "top/wb/u_b",
     }
@@ -129,16 +163,20 @@ endmodule
     assert "canonical allo_pe_top_k_pid_0_" in assembled
     assert "canonical allo_pe_top_k_pid_1_" in assembled
     assert ".a(x), .z(x)" in assembled
-    collateral = json.loads((assembler_dir / "outputs/macro-collateral.json").read_text())
+    collateral = json.loads(
+        (assembler_dir / "outputs/macro-collateral.json").read_text()
+    )
     assert len(collateral["rewritten_instances"]) == 2
     assert collateral["backend"] == "vitis"
     assert collateral["clock_port"] == "ap_clk"
-    assert "allo_asic_macro_modules" in (
-        assembler_dir / "outputs/macro-collateral.tcl"
-    ).read_text()
-    assert "set allo_asic_bypass_macro_generation 0" in (
-        assembler_dir / "outputs/macro-collateral.tcl"
-    ).read_text()
+    assert (
+        "allo_asic_macro_modules"
+        in (assembler_dir / "outputs/macro-collateral.tcl").read_text()
+    )
+    assert (
+        "set allo_asic_bypass_macro_generation 0"
+        in (assembler_dir / "outputs/macro-collateral.tcl").read_text()
+    )
     constraints = (assembler_dir / "outputs/constraints.tcl").read_text()
     assert "-period 10" in constraints
     assert "[get_ports ap_clk]" in constraints

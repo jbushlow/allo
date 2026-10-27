@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Diagnose final macro-LEF pin side/layer drift without failing PNR."""
 
 from __future__ import annotations
@@ -13,8 +16,7 @@ SIZE_RE = re.compile(r"^\s*SIZE\s+([0-9.eE+-]+)\s+BY\s+([0-9.eE+-]+)\s*;")
 PIN_RE = re.compile(r"^\s*PIN\s+(\S+)\s*$")
 LAYER_RE = re.compile(r"^\s*LAYER\s+(\S+)\s*;")
 RECT_RE = re.compile(
-    r"^\s*RECT\s+([0-9.eE+-]+)\s+([0-9.eE+-]+)\s+"
-    r"([0-9.eE+-]+)\s+([0-9.eE+-]+)\s*;"
+    r"^\s*RECT\s+([0-9.eE+-]+)\s+([0-9.eE+-]+)\s+" r"([0-9.eE+-]+)\s+([0-9.eE+-]+)\s*;"
 )
 
 
@@ -28,7 +30,9 @@ def read_plan(path: Path) -> dict[str, tuple[str, str]]:
     return plan
 
 
-def read_lef(path: Path) -> tuple[float, float, dict[str, list[tuple[str, tuple[float, ...]]]]]:
+def read_lef(
+    path: Path,
+) -> tuple[float, float, dict[str, list[tuple[str, tuple[float, ...]]]]]:
     width = height = None
     current_pin = None
     current_layer = None
@@ -46,7 +50,9 @@ def read_lef(path: Path) -> tuple[float, float, dict[str, list[tuple[str, tuple[
             current_layer = match.group(1)
             continue
         if current_pin is not None and current_layer and (match := RECT_RE.match(line)):
-            shapes[current_pin].append((current_layer, tuple(map(float, match.groups()))))
+            shapes[current_pin].append(
+                (current_layer, tuple(map(float, match.groups())))
+            )
             continue
         if current_pin is not None and line.strip() == f"END {current_pin}":
             current_pin = None
@@ -83,13 +89,18 @@ def main() -> int:
         pin_shapes = shapes.get(pin, [])
         if not pin_shapes:
             missing += 1
-            lines.append(f"MISSING pin={pin} expected_side={expected_side} expected_layer={expected_layer}")
+            lines.append(
+                f"MISSING pin={pin} expected_side={expected_side} expected_layer={expected_layer}"
+            )
             continue
         actual = [
             (layer, sorted(rectangle_sides(rect, width, height)), rect)
             for layer, rect in pin_shapes
         ]
-        if any(layer == expected_layer and expected_side in sides for layer, sides, _ in actual):
+        if any(
+            layer == expected_layer and expected_side in sides
+            for layer, sides, _ in actual
+        ):
             matched += 1
         else:
             mismatched += 1

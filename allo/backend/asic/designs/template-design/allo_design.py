@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Allo ASIC design template."""
 
 from pathlib import Path
@@ -40,13 +43,11 @@ def workload():
             # "input_name",
             # "output_name",
         ],
-
         # Give every argument an initial value, including output arrays.
         "arguments": {
             # "input_name": np.array([...], dtype=np.int8),
             # "output_name": np.zeros(..., dtype=np.int8),
         },
-
         # Include each output which the testbench should check.
         "expected": {
             # "output_name": np.array([...], dtype=np.int8),

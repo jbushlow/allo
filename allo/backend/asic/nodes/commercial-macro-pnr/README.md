@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Commercial macro PNR
 
 This Stage 1 node launches one isolated Innovus process for every synthesized

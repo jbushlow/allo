@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 set -euo pipefail
 start=$(date +%s); mkdir -p outputs; lvs_result=unavailable
 finish() {

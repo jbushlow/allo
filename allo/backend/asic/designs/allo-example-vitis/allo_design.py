@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Fixed 4x4 systolic GEMM used to exercise the Allo ASIC flow."""
 
 from pathlib import Path

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Run DRC and LVS for every hardened macro, concurrently and in isolation."""
 
 from __future__ import annotations
@@ -141,22 +144,49 @@ def main() -> None:
     WORK_ROOT.mkdir()
     if not entries:
         output_index = {
-            **{key: value for key, value in index.items() if key not in {"entries", "status"}},
-            "stage": "physical_verify", "entries": [], "status": [],
+            **{
+                key: value
+                for key, value in index.items()
+                if key not in {"entries", "status"}
+            },
+            "stage": "physical_verify",
+            "entries": [],
+            "status": [],
         }
-        (OUTPUT_BATCH / "index.json").write_text(json.dumps(output_index, indent=2) + "\n")
-        status_doc = {"status": "bypassed", "total": 0, "passed": 0, "failed": 0, "entries": []}
-        (ROOT / "outputs/physical-verify-status.json").write_text(json.dumps(status_doc, indent=2) + "\n")
+        (OUTPUT_BATCH / "index.json").write_text(
+            json.dumps(output_index, indent=2) + "\n"
+        )
+        status_doc = {
+            "status": "bypassed",
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "entries": [],
+        }
+        (ROOT / "outputs/physical-verify-status.json").write_text(
+            json.dumps(status_doc, indent=2) + "\n"
+        )
         metrics = {
-            "schema_version": 1, "node": "commercial-batch-physical-verify", "status": "bypassed",
-            "wall_seconds": round(time.monotonic() - batch_start, 3), "workers": [],
-            "aggregate": {"worker_count": 0, "maximum_worker_seconds": 0.0, "sum_worker_seconds": 0.0},
+            "schema_version": 1,
+            "node": "commercial-batch-physical-verify",
+            "status": "bypassed",
+            "wall_seconds": round(time.monotonic() - batch_start, 3),
+            "workers": [],
+            "aggregate": {
+                "worker_count": 0,
+                "maximum_worker_seconds": 0.0,
+                "sum_worker_seconds": 0.0,
+            },
         }
-        (ROOT / "outputs/macro-physical-verify-metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+        (ROOT / "outputs/macro-physical-verify-metrics.json").write_text(
+            json.dumps(metrics, indent=2) + "\n"
+        )
         print("Macro physical verification bypassed: batch contains zero entries.")
         return
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(entries)) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(entries)
+        ) as executor:
             statuses = list(executor.map(run_entry, entries))
     finally:
         emit_worker_logs(entries)
@@ -167,7 +197,11 @@ def main() -> None:
         if entry["id"] in passed
     ]
     output_index = {
-        **{key: value for key, value in index.items() if key not in {"entries", "status"}},
+        **{
+            key: value
+            for key, value in index.items()
+            if key not in {"entries", "status"}
+        },
         "stage": "physical_verify",
         "entries": output_entries,
         "status": statuses,

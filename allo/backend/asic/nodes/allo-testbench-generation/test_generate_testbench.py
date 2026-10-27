@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import importlib.util
 import json
 from pathlib import Path
@@ -83,13 +86,15 @@ def test_vitis_bfms_drive_away_from_propagated_clock_edge():
     axil_bfm = (template_dir / "vitis-axilite-master-bfm.sv").read_text()
     testbench = (template_dir / "testbench.sv.tpl").read_text()
 
-    assert 'ALLO_BAGL_BFM_DRIVE_DELAY_NS=%f' in memory_bfm
+    assert "ALLO_BAGL_BFM_DRIVE_DELAY_NS=%f" in memory_bfm
     assert "awready <= #(drive_delay_ns)" in memory_bfm
     assert "rvalid <= #(drive_delay_ns)" in memory_bfm
-    assert 'ALLO_BAGL_INPUT_DELAY_NS=%f' in axil_bfm
+    assert "ALLO_BAGL_INPUT_DELAY_NS=%f" in axil_bfm
     assert "@(negedge clk);" in axil_bfm
-    assert 'ALLO_BAGL_CLK_INS_SRC_LAT_NS=%f' in testbench
-    assert "#(allo_bagl_clock_compensation_ns + allo_bagl_output_delay_ns);" in testbench
+    assert "ALLO_BAGL_CLK_INS_SRC_LAT_NS=%f" in testbench
+    assert (
+        "#(allo_bagl_clock_compensation_ns + allo_bagl_output_delay_ns);" in testbench
+    )
 
 
 def test_systemc_reset_starts_deasserted_before_workload_assertion():
@@ -130,50 +135,81 @@ def test_systemc_reuses_synchronous_memory_generation(tmp_path, monkeypatch):
         "write_ready": port("v11_wrdy", "input", 1),
     }
     manifest = {
-        "backend": "systemc", "top": "top",
+        "backend": "systemc",
+        "top": "top",
         "rtl_artifact": {"published_path": "backend-rtl/concat_rtl.v"},
         "top_interface": {
             "protocol": "systemc_connections",
             "clock": {"name": "clk", "edge": "rising"},
-            "reset": {"name": "rst", "polarity": "active_low",
-                      "default_asserted_cycles": 2},
+            "reset": {
+                "name": "rst",
+                "polarity": "active_low",
+                "default_asserted_cycles": 2,
+            },
             "completion": {"kind": "top_done", "port": "done", "active_level": 1},
         },
         "top_arguments": [
             {
-                "name": "A", "catapult_argument": "v10",
+                "name": "A",
+                "catapult_argument": "v10",
                 "semantic_direction": "input",
                 "interface_protocol": "systemc_sync_memory_read",
-                "interface": {"roles": read_roles, "layout": "row_major",
-                              "element_bits": 16, "element_count": 4,
-                              "data_width": 16, "address_width": 2,
-                              "address_capacity": 4, "read_latency_cycles": 1},
-                "rtl_ports": list(read_roles.values()), "triosy_ports": [],
+                "interface": {
+                    "roles": read_roles,
+                    "layout": "row_major",
+                    "element_bits": 16,
+                    "element_count": 4,
+                    "data_width": 16,
+                    "address_width": 2,
+                    "address_capacity": 4,
+                    "read_latency_cycles": 1,
+                },
+                "rtl_ports": list(read_roles.values()),
+                "triosy_ports": [],
             },
             {
-                "name": "C", "catapult_argument": "v11",
+                "name": "C",
+                "catapult_argument": "v11",
                 "semantic_direction": "output",
                 "interface_protocol": "systemc_sync_memory_write",
-                "interface": {"roles": write_roles, "layout": "row_major",
-                              "element_bits": 16, "element_count": 4,
-                              "data_width": 16, "address_width": 2,
-                              "address_capacity": 4, "read_latency_cycles": None},
-                "rtl_ports": list(write_roles.values()), "triosy_ports": [],
+                "interface": {
+                    "roles": write_roles,
+                    "layout": "row_major",
+                    "element_bits": 16,
+                    "element_count": 4,
+                    "data_width": 16,
+                    "address_width": 2,
+                    "address_capacity": 4,
+                    "read_latency_cycles": None,
+                },
+                "rtl_ports": list(write_roles.values()),
+                "triosy_ports": [],
             },
         ],
     }
     (inputs / "asic-manifest-final.json").write_text(json.dumps(manifest))
     vector = lambda name: {
-        "element_bits": 16, "element_count": 4,
+        "element_bits": 16,
+        "element_count": 4,
         "file": f"workload-vectors/call_000/{name}.initial.hex",
     }
     workload = {
-        "top_function": "top", "call_signature": ["A", "C"],
+        "top_function": "top",
+        "call_signature": ["A", "C"],
         "default_timeout_cycles": 100,
-        "calls": [{"name": "memory", "reset_before": True,
-                   "arguments": {"A": vector("A"), "C": vector("C")},
-                   "expected": {"C": {"element_count": 4,
-                       "file": "workload-vectors/call_000/C.expected.hex"}}}],
+        "calls": [
+            {
+                "name": "memory",
+                "reset_before": True,
+                "arguments": {"A": vector("A"), "C": vector("C")},
+                "expected": {
+                    "C": {
+                        "element_count": 4,
+                        "file": "workload-vectors/call_000/C.expected.hex",
+                    }
+                },
+            }
+        ],
     }
     monkeypatch.setattr(GENERATOR, "INPUTS", inputs)
     monkeypatch.setattr(GENERATOR, "OUTPUTS", outputs)
@@ -186,8 +222,7 @@ def test_systemc_reuses_synchronous_memory_generation(tmp_path, monkeypatch):
     assert "assign v11_wrdy = 1'b1;" in testbench
     assert "if ((rst === 1'b1) && (v10_re === 1'b1)) begin" in testbench
     assert (
-        "v10_q <= #(allo_bagl_bfm_drive_delay_ns) "
-        "memory_A[v10_radr];"
+        "v10_q <= #(allo_bagl_bfm_drive_delay_ns) " "memory_A[v10_radr];"
     ) in testbench
     assert "if (done === 1'b1) completion_seen[0] <= 1'b1;" in testbench
     assert "rst = 1'b0;" in testbench

@@ -1,6 +1,9 @@
-#=========================================================================
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
+# =========================================================================
 # assertion_helpers.py
-#=========================================================================
+# =========================================================================
 # Helper functions for assertions
 #
 # Author : Christopher Torng
@@ -17,25 +20,27 @@ import re
 # percentage of registers that are clock gated.
 #
 
+
 def percent_clock_gated():
 
-  # Read the clock-gating report
+    # Read the clock-gating report
 
-  with open( glob('reports/*clock_gating.rpt')[0] ) as fd:
-    lines = fd.readlines()
+    with open(glob("reports/*clock_gating.rpt")[0]) as fd:
+        lines = fd.readlines()
 
-  # Get the line with the clock-gating percentage, which looks like this:
-  #
-  #     |    Number of Gated registers          |    32 (94.12%)   |
-  #
+    # Get the line with the clock-gating percentage, which looks like this:
+    #
+    #     |    Number of Gated registers          |    32 (94.12%)   |
+    #
 
-  gate_line = [ l for l in lines if 'Number of Gated registers' in l ][0]
+    gate_line = [l for l in lines if "Number of Gated registers" in l][0]
 
-  # Extract the percentage between parentheses
+    # Extract the percentage between parentheses
 
-  percentage = float( re.search( r'\((.*?)%\)', gate_line ).group(1) )/100
+    percentage = float(re.search(r"\((.*?)%\)", gate_line).group(1)) / 100
 
-  return percentage
+    return percentage
+
 
 # n_regs
 #
@@ -43,25 +48,23 @@ def percent_clock_gated():
 # registers that exist in the design.
 #
 
+
 def n_regs():
 
-  # Read the clock-gating report
+    # Read the clock-gating report
 
-  with open( glob('reports/*clock_gating.rpt')[0] ) as fd:
-    lines = fd.readlines()
+    with open(glob("reports/*clock_gating.rpt")[0]) as fd:
+        lines = fd.readlines()
 
-  # Get the line with the number of registers, which looks like this:
-  #
-  #     |    Total number of registers          |       34         |
-  #
+    # Get the line with the number of registers, which looks like this:
+    #
+    #     |    Total number of registers          |       34         |
+    #
 
-  regs_line = [ l for l in lines if 'Total number of registers' in l ][0]
+    regs_line = [l for l in lines if "Total number of registers" in l][0]
 
-  # Extract the number
+    # Extract the number
 
-  regs = int( re.search( r'\|\s*(\d*)\s*\|', regs_line ).group(1) )
+    regs = int(re.search(r"\|\s*(\d*)\s*\|", regs_line).group(1))
 
-  return regs
-
-
-
+    return regs

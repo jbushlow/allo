@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Exercise the zero-entry contract without requiring commercial tools."""
 
 import json
@@ -9,19 +12,27 @@ from pathlib import Path
 ROOT = Path(__file__).parent
 
 
-def run_empty_stage(tmp_path: Path, node: str, input_name: str, output_name: str) -> dict:
+def run_empty_stage(
+    tmp_path: Path, node: str, input_name: str, output_name: str
+) -> dict:
     work = tmp_path / node
     batch = work / "inputs" / input_name
     batch.mkdir(parents=True)
     (batch / "index.json").write_text(
-        json.dumps({"schema_version": 1, "bypass_macro_generation": True, "entries": []})
+        json.dumps(
+            {"schema_version": 1, "bypass_macro_generation": True, "entries": []}
+        )
     )
-    script = ROOT / node / {
-        "commercial-batch-synthesis": "batch_synthesis.py",
-        "commercial-macro-pnr": "batch_pnr.py",
-        "commercial-batch-physical-verify": "batch_physical_verify.py",
-        "commercial-batch-signoff": "batch_signoff.py",
-    }[node]
+    script = (
+        ROOT
+        / node
+        / {
+            "commercial-batch-synthesis": "batch_synthesis.py",
+            "commercial-macro-pnr": "batch_pnr.py",
+            "commercial-batch-physical-verify": "batch_physical_verify.py",
+            "commercial-batch-signoff": "batch_signoff.py",
+        }[node]
+    )
     subprocess.run([sys.executable, str(script)], cwd=work, check=True)
     index = json.loads((work / "outputs" / output_name / "index.json").read_text())
     assert index["entries"] == []

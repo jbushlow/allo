@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Allo ASIC physical intent
 
 Within each systolic kernel, PID columns increase east and PID rows increase

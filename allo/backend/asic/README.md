@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # allo-asic
 
 This directory contains the integrated hierarchical Allo flow, whose designs compile an Allo

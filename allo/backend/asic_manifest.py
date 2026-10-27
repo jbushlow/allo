@@ -994,7 +994,11 @@ def parse_systemc_synthesis_contract(project):
     """Capture the Catapult settings that realized a SystemC design."""
     project = Path(project)
     run_tcl = project / "run.tcl"
-    text = run_tcl.read_text(encoding="utf-8", errors="replace") if run_tcl.is_file() else ""
+    text = (
+        run_tcl.read_text(encoding="utf-8", errors="replace")
+        if run_tcl.is_file()
+        else ""
+    )
     clock = re.search(r"-CLOCK_PERIOD\s+([0-9]+(?:\.[0-9]+)?)", text)
     library = re.search(r"solution\s+library\s+add\s+(\S+)", text)
     logs = sorted(project.glob("build/**/catapult.log"))
@@ -1640,9 +1644,7 @@ def enrich_systemc(pre, project, rtl_dir, rtl_path, hls_source):
             "rtl_hierarchy": hierarchy,
             "rtl_artifact": {
                 "path": str(rtl_path),
-                "project_relative_path": str(
-                    Path(rtl_path).relative_to(Path(project))
-                ),
+                "project_relative_path": str(Path(rtl_path).relative_to(Path(project))),
                 "published_path": "backend-rtl/concat_rtl.v",
                 "kind": "systemc_catapult_rtl",
                 "self_contained": True,
@@ -1953,7 +1955,11 @@ def _systemc_artifact_paths(project, rtl_dir):
     source = Path(project) / "kernel.cpp"
     rtl_dir = Path(rtl_dir)
     rtl = next(
-        (path for name in ("concat_rtl.v", "rtl.v") if (path := rtl_dir / name).is_file()),
+        (
+            path
+            for name in ("concat_rtl.v", "rtl.v")
+            if (path := rtl_dir / name).is_file()
+        ),
         None,
     )
     missing = []
@@ -2012,9 +2018,7 @@ def emit_final(project, configs, backend):
     if requested["debug_artifacts"]:
         debug_dir = os.path.join(project, requested["debug_dir"])
         if backend == "vitis":
-            write_post_hls_debug(
-                final, debug_dir, hls_source, synthesis_log, rtl_dir
-            )
+            write_post_hls_debug(final, debug_dir, hls_source, synthesis_log, rtl_dir)
         else:
             _write(os.path.join(debug_dir, "systemc-rtl-path.txt"), rtl_path + "\n")
     return final

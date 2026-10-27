@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Allo 4x4 SystemC/Catapult ASIC example
 
 This is a standalone copy of the fixed Vitis pipe cleaner configured for:

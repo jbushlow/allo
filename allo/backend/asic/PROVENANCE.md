@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Provenance of this flow
 
 This directory is Julian Bushlow's mflowgen ASIC flow, vendored from

@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import importlib.util
 import sys
 import tempfile
@@ -6,10 +9,7 @@ import subprocess
 from pathlib import Path
 
 
-SCRIPT = (
-    Path(__file__).parent
-    / "worker/scripts/build_coarse_top_layer_obs.py"
-)
+SCRIPT = Path(__file__).parent / "worker/scripts/build_coarse_top_layer_obs.py"
 SPEC = importlib.util.spec_from_file_location("build_coarse_top_layer_obs", SCRIPT)
 MODULE = importlib.util.module_from_spec(SPEC)
 sys.modules[SPEC.name] = MODULE
@@ -47,16 +47,27 @@ END sample
                 # The real terminal extends inward beyond its edge LEF pin.
                 "RECT\twire\tresult\t5\t5\t8\t6\n"
             )
-            subprocess.run([
-                sys.executable, str(SCRIPT),
-                "--input-lef", str(root / "input.lef"),
-                "--geometry", str(root / "geometry.tsv"),
-                "--output-lef", str(root / "output.lef"),
-                "--report", str(root / "report.txt"),
-                "--grid-tracks", "1",
-                "--pin-grid-tracks", "1",
-                "--spacing-tracks", "0",
-            ], check=True)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--input-lef",
+                    str(root / "input.lef"),
+                    "--geometry",
+                    str(root / "geometry.tsv"),
+                    "--output-lef",
+                    str(root / "output.lef"),
+                    "--report",
+                    str(root / "report.txt"),
+                    "--grid-tracks",
+                    "1",
+                    "--pin-grid-tracks",
+                    "1",
+                    "--spacing-tracks",
+                    "0",
+                ],
+                check=True,
+            )
             output = (root / "output.lef").read_text()
 
         self.assertIn("RECT 5.000000 5.000000 7.000000 6.000000", output)
@@ -160,9 +171,7 @@ END sample
                 "RECT\twire\tresult\t1\t2\t3\t4\n"
             )
             _, _, _, rectangles = MODULE.read_geometry(path)
-            self.assertEqual(
-                rectangles, [("wire", "result", (1.0, 2.0, 3.0, 4.0))]
-            )
+            self.assertEqual(rectangles, [("wire", "result", (1.0, 2.0, 3.0, 4.0))])
 
     def test_normalizes_tcl_quoted_bus_and_hierarchical_names(self):
         self.assertEqual(
@@ -197,14 +206,16 @@ END sample
         self.assertFalse(set(path) & {(1, 2), (3, 2)})
 
     def test_rectangle_upper_edge_is_half_open(self):
-        cells = set(MODULE.cells_for_rect(
-            (0.0, 0.0, 1.0, 1.0),
-            (0.0, 0.0, 4.0, 4.0),
-            1.0,
-            0.0,
-            4,
-            4,
-        ))
+        cells = set(
+            MODULE.cells_for_rect(
+                (0.0, 0.0, 1.0, 1.0),
+                (0.0, 0.0, 4.0, 4.0),
+                1.0,
+                0.0,
+                4,
+                4,
+            )
+        )
         self.assertEqual(cells, {(0, 0)})
 
     def test_hybrid_obs_keeps_verified_pin_access(self):
@@ -218,16 +229,27 @@ END sample
                 "RECT\twire\tresult\t2\t3\t3\t4\n"
                 "RECT\twire\tinternal\t6\t6\t7\t7\n"
             )
-            subprocess.run([
-                sys.executable, str(SCRIPT),
-                "--input-lef", str(root / "input.lef"),
-                "--geometry", str(root / "geometry.tsv"),
-                "--output-lef", str(root / "output.lef"),
-                "--report", str(root / "report.txt"),
-                "--grid-tracks", "4",
-                "--pin-grid-tracks", "1",
-                "--spacing-tracks", "0",
-            ], check=True)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--input-lef",
+                    str(root / "input.lef"),
+                    "--geometry",
+                    str(root / "geometry.tsv"),
+                    "--output-lef",
+                    str(root / "output.lef"),
+                    "--report",
+                    str(root / "report.txt"),
+                    "--grid-tracks",
+                    "4",
+                    "--pin-grid-tracks",
+                    "1",
+                    "--spacing-tracks",
+                    "0",
+                ],
+                check=True,
+            )
             report = (root / "report.txt").read_text()
             self.assertIn("pin_grid_tracks 1", report)
             self.assertIn("pin_rectangles 1", report)
@@ -262,16 +284,27 @@ END sample
                 "RECT\twire\tother\t1\t2\t7\t3\n"
                 "RECT\twire\tother\t1\t4\t7\t5\n"
             )
-            subprocess.run([
-                sys.executable, str(SCRIPT),
-                "--input-lef", str(root / "input.lef"),
-                "--geometry", str(root / "geometry.tsv"),
-                "--output-lef", str(root / "output.lef"),
-                "--report", str(root / "report.txt"),
-                "--grid-tracks", "4",
-                "--pin-grid-tracks", "1",
-                "--spacing-tracks", "1",
-            ], check=True)
+            subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--input-lef",
+                    str(root / "input.lef"),
+                    "--geometry",
+                    str(root / "geometry.tsv"),
+                    "--output-lef",
+                    str(root / "output.lef"),
+                    "--report",
+                    str(root / "report.txt"),
+                    "--grid-tracks",
+                    "4",
+                    "--pin-grid-tracks",
+                    "1",
+                    "--spacing-tracks",
+                    "1",
+                ],
+                check=True,
+            )
             report = (root / "report.txt").read_text()
             self.assertIn("signal_pin_rectangles 0", report)
             self.assertIn("power_ground_pin_rectangles 1", report)
@@ -296,16 +329,28 @@ END sample
                 "PITCH\t1\n"
                 "RECT\twire\tother\t2\t3\t6\t4\n"
             )
-            result = subprocess.run([
-                sys.executable, str(SCRIPT),
-                "--input-lef", str(root / "input.lef"),
-                "--geometry", str(root / "geometry.tsv"),
-                "--output-lef", str(root / "output.lef"),
-                "--report", str(root / "report.txt"),
-                "--grid-tracks", "4",
-                "--pin-grid-tracks", "1",
-                "--spacing-tracks", "1",
-            ], text=True, capture_output=True)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--input-lef",
+                    str(root / "input.lef"),
+                    "--geometry",
+                    str(root / "geometry.tsv"),
+                    "--output-lef",
+                    str(root / "output.lef"),
+                    "--report",
+                    str(root / "report.txt"),
+                    "--grid-tracks",
+                    "4",
+                    "--pin-grid-tracks",
+                    "1",
+                    "--spacing-tracks",
+                    "1",
+                ],
+                text=True,
+                capture_output=True,
+            )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("no matching owning-net geometry", result.stderr)
 
@@ -320,16 +365,28 @@ END sample
                 "RECT\twire\tresult\t2\t3\t3\t4\n"
                 "RECT\twire\tother\t2.5\t3\t3.5\t4\n"
             )
-            result = subprocess.run([
-                sys.executable, str(SCRIPT),
-                "--input-lef", str(root / "input.lef"),
-                "--geometry", str(root / "geometry.tsv"),
-                "--output-lef", str(root / "output.lef"),
-                "--report", str(root / "report.txt"),
-                "--grid-tracks", "4",
-                "--pin-grid-tracks", "1",
-                "--spacing-tracks", "0",
-            ], text=True, capture_output=True)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--input-lef",
+                    str(root / "input.lef"),
+                    "--geometry",
+                    str(root / "geometry.tsv"),
+                    "--output-lef",
+                    str(root / "output.lef"),
+                    "--report",
+                    str(root / "report.txt"),
+                    "--grid-tracks",
+                    "4",
+                    "--pin-grid-tracks",
+                    "1",
+                    "--spacing-tracks",
+                    "0",
+                ],
+                text=True,
+                capture_output=True,
+            )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("unrelated top-layer geometry", result.stderr)
 
@@ -343,16 +400,28 @@ END sample
                 "PITCH\t1\n"
                 "RECT\twire\tother\t6\t6\t7\t7\n"
             )
-            result = subprocess.run([
-                sys.executable, str(SCRIPT),
-                "--input-lef", str(root / "input.lef"),
-                "--geometry", str(root / "geometry.tsv"),
-                "--output-lef", str(root / "output.lef"),
-                "--report", str(root / "report.txt"),
-                "--grid-tracks", "4",
-                "--pin-grid-tracks", "1",
-                "--spacing-tracks", "0",
-            ], text=True, capture_output=True)
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(SCRIPT),
+                    "--input-lef",
+                    str(root / "input.lef"),
+                    "--geometry",
+                    str(root / "geometry.tsv"),
+                    "--output-lef",
+                    str(root / "output.lef"),
+                    "--report",
+                    str(root / "report.txt"),
+                    "--grid-tracks",
+                    "4",
+                    "--pin-grid-tracks",
+                    "1",
+                    "--spacing-tracks",
+                    "0",
+                ],
+                text=True,
+                capture_output=True,
+            )
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("no matching owning-net geometry", result.stderr)
 

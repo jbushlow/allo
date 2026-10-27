@@ -418,7 +418,7 @@ def refuse_self_fifo_for_synthesis(hls_code):
     module = None
     for line in hls_code.splitlines():
         if line.startswith("SC_MODULE("):
-            module = line[len("SC_MODULE("):].split(")")[0]
+            module = line[len("SC_MODULE(") :].split(")")[0]
         m = _SELF_FIFO_PORT.search(line)
         if m:
             found.append((module, m.group("name")))
@@ -428,8 +428,8 @@ def refuse_self_fifo_for_synthesis(hls_code):
     raise RuntimeError(
         f"SystemC synthesis: {what} is a self-FIFO (one kernel both puts and "
         "gets it). Its lowering (an AlloFifo self-loop with a synchronous "
-        "occupancy counter) cannot be scheduled by Catapult: SCHD-30 \"could not "
-        "schedule partition ... even with unlimited resources\", pipelined or "
+        'occupancy counter) cannot be scheduled by Catapult: SCHD-30 "could not '
+        'schedule partition ... even with unlimited resources", pipelined or '
         "not. csim (mode='csim') runs it; for synthesis keep the FIFO as an "
         "in-kernel ring (an array with head/tail pointers) or move its two "
         "ends into two kernels."
@@ -502,7 +502,7 @@ class HLSModule:
                         "(`@ Stateful(reset=False)`, README D-14) is only lowered by "
                         f'the SystemC backend (target="systemc"), not "{platform}": '
                         "this backend has no measured form that leaves storage "
-                        "unreset. Use target=\"systemc\", or declare it `@ Stateful`."
+                        'unreset. Use target="systemc", or declare it `@ Stateful`.'
                     )
             if platform == "systemc":
                 systemc.stamp_arg_dirs(self.module)

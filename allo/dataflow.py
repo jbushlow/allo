@@ -20,7 +20,12 @@ from ._mlir.ir import (
     IntegerAttr,
     Type,
 )
-from ._mlir.dialects import func as func_d, allo as allo_d, memref as memref_d, arith as arith_d
+from ._mlir.dialects import (
+    func as func_d,
+    allo as allo_d,
+    memref as memref_d,
+    arith as arith_d,
+)
 from ._mlir.passmanager import PassManager as mlir_pass_manager
 from .customize import customize as _customize, Schedule
 from .utils import parse_kernel_name, construct_kernel_name

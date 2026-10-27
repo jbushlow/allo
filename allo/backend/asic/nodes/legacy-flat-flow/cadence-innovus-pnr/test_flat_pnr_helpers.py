@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import importlib.util
 from pathlib import Path
 
@@ -21,7 +24,8 @@ def test_welltap_cuts_coalesce_rows():
 def test_metrics_are_flat_and_enforce_hold_target(tmp_path):
     metrics = load("collect_pnr_metrics", ROOT / "collect_pnr_metrics.py")
     reports, logs = tmp_path / "reports", tmp_path / "logs"
-    reports.mkdir(); logs.mkdir()
+    reports.mkdir()
+    logs.mkdir()
     (reports / "pnr-stage-times.rpt").write_text("placement 1.5\n")
     (reports / "preplace.summary").write_text("Density: 60%\n")
     (reports / "signoff.summary").write_text("Density: 65%\n")

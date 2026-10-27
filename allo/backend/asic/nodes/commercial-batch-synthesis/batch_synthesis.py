@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Run one isolated Design Compiler worker per selected macro class."""
 
 from __future__ import annotations
@@ -222,22 +225,43 @@ def main() -> None:
             "entries": [],
             "status": [],
         }
-        (OUTPUT_BATCH / "index.json").write_text(json.dumps(output_index, indent=2) + "\n")
-        status_doc = {"status": "bypassed", "total": 0, "passed": 0, "failed": 0, "entries": []}
-        (ROOT / "outputs" / "synthesis-status.json").write_text(json.dumps(status_doc, indent=2) + "\n")
-        metrics = {
-            "schema_version": 1, "node": "commercial-batch-synthesis",
-            "status": "bypassed", "wall_seconds": round(time.monotonic() - batch_start, 3),
-            "workers": [], "aggregate": {"worker_count": 0, "maximum_worker_seconds": 0.0, "sum_worker_seconds": 0.0},
+        (OUTPUT_BATCH / "index.json").write_text(
+            json.dumps(output_index, indent=2) + "\n"
+        )
+        status_doc = {
+            "status": "bypassed",
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "entries": [],
         }
-        (ROOT / "outputs" / "macro-synthesis-metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+        (ROOT / "outputs" / "synthesis-status.json").write_text(
+            json.dumps(status_doc, indent=2) + "\n"
+        )
+        metrics = {
+            "schema_version": 1,
+            "node": "commercial-batch-synthesis",
+            "status": "bypassed",
+            "wall_seconds": round(time.monotonic() - batch_start, 3),
+            "workers": [],
+            "aggregate": {
+                "worker_count": 0,
+                "maximum_worker_seconds": 0.0,
+                "sum_worker_seconds": 0.0,
+            },
+        }
+        (ROOT / "outputs" / "macro-synthesis-metrics.json").write_text(
+            json.dumps(metrics, indent=2) + "\n"
+        )
         print("Macro synthesis bypassed: batch contains zero entries.")
         return
 
     # Intentionally launch the whole batch. Each commercial process has an
     # isolated work directory; license and scheduler limits remain external.
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(entries)) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(entries)
+        ) as executor:
             statuses = list(executor.map(run_entry, entries))
     finally:
         # mflowgen captures this node's stdout/stderr in mflowgen-run.log. Emit

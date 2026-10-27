@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Full-chip assembly planning
 
 This node validates the normalized RTL, final Allo ASIC manifest, and hardened

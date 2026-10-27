@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Template constructor for the hierarchical Allo ASIC flow."""
 
 import os
@@ -82,42 +85,28 @@ def construct():
 
     flow_utilities = Node(str(nodes_dir / "asic-flow-utilities"))
     allo_build = Node(str(nodes_dir / "allo-asic-compilation"))
-    testbench_generation = Node(
-        str(nodes_dir / "allo-testbench-generation")
-    )
+    testbench_generation = Node(str(nodes_dir / "allo-testbench-generation"))
     rtl_sim = Node(str(nodes_dir / "allo-rtl-sim"))
     ffgl_sim = Node(str(nodes_dir / "allo-ffgl-sim"))
     bagl_sim = Node(str(nodes_dir / "allo-bagl-sim"))
     power_analysis = Node(str(nodes_dir / "synopsys-pt-power"))
-    macro_activity = Node(
-        str(nodes_dir / "allo-macro-activity-extraction")
-    )
+    macro_activity = Node(str(nodes_dir / "allo-macro-activity-extraction"))
     rtl_normalize = Node(str(nodes_dir / "sv2v-rtl-allo"))
 
     macro_plan = Node(str(nodes_dir / "allo-asic-macro-plan"))
-    macro_synthesis = Node(
-        str(nodes_dir / "commercial-batch-synthesis")
-    )
+    macro_synthesis = Node(str(nodes_dir / "commercial-batch-synthesis"))
     macro_pnr = Node(str(nodes_dir / "commercial-macro-pnr"))
-    macro_physical_verify = Node(
-        str(nodes_dir / "commercial-batch-physical-verify")
-    )
+    macro_physical_verify = Node(str(nodes_dir / "commercial-batch-physical-verify"))
     macro_signoff = Node(str(nodes_dir / "commercial-batch-signoff"))
     macro_publish = Node(str(nodes_dir / "commercial-macro-publish"))
     macro_power = Node(str(nodes_dir / "commercial-batch-macro-power"))
 
     assembly_plan = Node(str(nodes_dir / "allo-asic-assembly-plan"))
     rtl_assembly = Node(str(nodes_dir / "allo-asic-rtl-assembly"))
-    full_chip_synthesis = Node(
-        str(nodes_dir / "commercial-full-chip-synthesis")
-    )
-    physical_intent = Node(
-        str(nodes_dir / "allo-asic-physical-intent")
-    )
+    full_chip_synthesis = Node(str(nodes_dir / "commercial-full-chip-synthesis"))
+    physical_intent = Node(str(nodes_dir / "allo-asic-physical-intent"))
     full_chip_pnr = Node(str(nodes_dir / "commercial-full-chip-pnr"))
-    full_chip_gdsmerge = Node(
-        str(nodes_dir / "commercial-full-chip-gdsmerge")
-    )
+    full_chip_gdsmerge = Node(str(nodes_dir / "commercial-full-chip-gdsmerge"))
     full_chip_drc = Node(str(nodes_dir / "commercial-full-chip-drc"))
     full_chip_lvs = Node(str(nodes_dir / "commercial-full-chip-lvs"))
     flow_summary = Node(str(nodes_dir / "allo-asic-flow-summary"))
@@ -296,26 +285,21 @@ def construct():
             "backend_options": BACKEND_OPTIONS,
             "python_bin": allo_python,
             "allo_setup_script": allo_setup_script,
-
             # Design and technology
             "top_module": "top",
             "design_name": "top",
             "report_design_name": REPORT_DESIGN_NAME,
             "adk": ADK,
             "adk_view": ADK_VIEW,
-
             # Clock targets
             "macro_clock_period": 8.0,
             "clock_period": 10.0,
-
             # Generated testbench
             "allo_testbench_top_function": "top",
-
             # Macro-selection policy
             "min_macro_reuse": 2,
             "harden_repeated_hls_submodules": False,
             "fold_fifos_into_macro": True,
-
             # Floorplanning
             "core_density_target": 0.50,
             "macro_separation_x": 5.0,
@@ -324,10 +308,8 @@ def construct():
             "kernel_separation_y": 10.0,
             "sram_separation": 15.0,
             "macro_halo": 0.5,
-
             # Technology-dependent macro routing limit
             "highest_macro_routing_layer": 5,
-
             # Local compute resources
             "enable_gui": False,
             "nthreads": 4,
@@ -336,12 +318,10 @@ def construct():
             "drc_nthreads": 4,
             "lvs_nthreads": 4,
             "macro_power_max_workers": 4,
-
             # Verification policy
             "antenna_check_policy": "report",
             "drc_check_policy": "error",
             "bagl_failure_policy": "error",
-
             # Power and output retention
             "activity_source": "bagl_vcd",
             "cleanup_enabled": True,

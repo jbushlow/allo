@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Backend-specific configuration and artifact discovery for the Allo node."""
 
 import ast
@@ -15,14 +18,10 @@ def parse_backend_options(options_text):
         options = {}
         for item in options_text.split(","):
             if "=" not in item:
-                raise ValueError(
-                    f"invalid backend option {item!r}; expected key=value"
-                )
+                raise ValueError(f"invalid backend option {item!r}; expected key=value")
             key, value = (part.strip() for part in item.split("=", 1))
             if not key or not value:
-                raise ValueError(
-                    f"invalid backend option {item!r}; expected key=value"
-                )
+                raise ValueError(f"invalid backend option {item!r}; expected key=value")
             if value.lower() == "true":
                 value = True
             elif value.lower() == "false":
@@ -83,9 +82,7 @@ def configure_backend(backend, clock_period, options_text):
                 "generalize_pid_specializations"
             ]
         if "pid_generalization_policy" in options:
-            configs["pid_generalization_policy"] = options[
-                "pid_generalization_policy"
-            ]
+            configs["pid_generalization_policy"] = options["pid_generalization_policy"]
         return "catapult", configs, {"device": device, "rtl_stage": "rtl"}
     if backend == "systemc":
         device = options.get("device", "nangate-45nm_beh")
@@ -109,14 +106,18 @@ def configure_backend(backend, clock_period, options_text):
         ):
             if name in options:
                 configs[name] = options[name]
-        return "systemc", configs, {
-            "device": device,
-            "rtl_stage": "rtl",
-            "frontend": "systemc",
-            "channel_protocol": "connections",
-            "synthesis_engine": "catapult",
-            "rtl_artifact": "concat_rtl.v",
-        }
+        return (
+            "systemc",
+            configs,
+            {
+                "device": device,
+                "rtl_stage": "rtl",
+                "frontend": "systemc",
+                "channel_protocol": "connections",
+                "synthesis_engine": "catapult",
+                "rtl_artifact": "concat_rtl.v",
+            },
+        )
     else:
         raise ValueError(
             f"unsupported Allo backend {backend!r}; supported: vitis, catapult, systemc"
@@ -128,7 +129,8 @@ def find_rtl_directory(backend, project):
     project = Path(project)
     if backend == "vitis":
         candidates = [
-            path for path in sorted(project.glob("*.prj/*/syn/verilog"))
+            path
+            for path in sorted(project.glob("*.prj/*/syn/verilog"))
             if path.is_dir()
         ]
         if len(candidates) != 1:
@@ -139,9 +141,7 @@ def find_rtl_directory(backend, project):
         return candidates[0]
     if backend == "catapult":
         candidates = sorted(
-            rtl.parent
-            for rtl in project.glob("Catapult*/*.v1/rtl.v")
-            if rtl.is_file()
+            rtl.parent for rtl in project.glob("Catapult*/*.v1/rtl.v") if rtl.is_file()
         )
         if len(candidates) != 1:
             raise RuntimeError(
@@ -188,7 +188,9 @@ def publish_rtl_artifacts(backend, project, output):
         if not source_rtl.is_file():
             source_rtl = source / "rtl.v"
         if not source_rtl.is_file():
-            raise RuntimeError(f"missing required SystemC RTL artifact beneath: {source}")
+            raise RuntimeError(
+                f"missing required SystemC RTL artifact beneath: {source}"
+            )
         shutil.copy2(source_rtl, output / "concat_rtl.v")
     else:
         source_rtl = source / "concat_rtl.v"

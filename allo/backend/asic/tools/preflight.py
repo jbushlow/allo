@@ -102,8 +102,10 @@ def check_tools():
     if shutil.which("dc_shell"):
         good("dc_shell", os.path.realpath(shutil.which("dc_shell")))
     else:
-        missing("dc_shell not on PATH",
-                "module load synopsys-dc-W-2024.09 synopsys-2024 (and a licence)")
+        missing(
+            "dc_shell not on PATH",
+            "module load synopsys-dc-W-2024.09 synopsys-2024 (and a licence)",
+        )
 
     if shutil.which("mflowgen"):
         version = run("mflowgen", "--version")
@@ -112,21 +114,27 @@ def check_tools():
         if found.startswith("0.8"):
             good("mflowgen", found)
         else:
-            missing(f"mflowgen is {found}, not 0.8.x",
-                    "pip install --editable \"mflowgen @ git+https://github.com/"
-                    f"mflowgen/mflowgen.git@{MFLOWGEN_PIN}\"  # PyPI 0.7.0 lacks Node")
+            missing(
+                f"mflowgen is {found}, not 0.8.x",
+                'pip install --editable "mflowgen @ git+https://github.com/'
+                f'mflowgen/mflowgen.git@{MFLOWGEN_PIN}"  # PyPI 0.7.0 lacks Node',
+            )
     else:
-        missing("mflowgen not on PATH",
-                "pip install --editable \"mflowgen @ git+https://github.com/"
-                f"mflowgen/mflowgen.git@{MFLOWGEN_PIN}\"")
+        missing(
+            "mflowgen not on PATH",
+            'pip install --editable "mflowgen @ git+https://github.com/'
+            f'mflowgen/mflowgen.git@{MFLOWGEN_PIN}"',
+        )
 
     if shutil.which("sv2v"):
         # Unpinned upstream: record whatever resolved, so a later run can tell
         # whether it changed. Only needed when normalize_rtl is True.
         good("sv2v", run("sv2v", "--version") or "version unknown")
     else:
-        missing("sv2v not on PATH (needed only when normalize_rtl is True)",
-                "conda install ucb-bar::sv2v")
+        missing(
+            "sv2v not on PATH (needed only when normalize_rtl is True)",
+            "conda install ucb-bar::sv2v",
+        )
 
 
 def check_flow():
@@ -134,16 +142,21 @@ def check_flow():
     if os.path.isdir(nodes):
         good("node library", nodes)
     else:
-        missing(f"no node library at {nodes}",
-                "set ALLO_ASIC_FLOW, or check out allo/backend/asic")
+        missing(
+            f"no node library at {nodes}",
+            "set ALLO_ASIC_FLOW, or check out allo/backend/asic",
+        )
         return
     legacy = os.path.join(nodes, "legacy-flat-flow")
     required = ("sv2v-design-collector", "synopsys-dc-synthesis")
-    absent = [name for name in required
-              if not os.path.isdir(os.path.join(legacy, name))]
+    absent = [
+        name for name in required if not os.path.isdir(os.path.join(legacy, name))
+    ]
     if absent:
-        missing("legacy flat node set is incomplete",
-                f"missing {', '.join(absent)} beneath {legacy}")
+        missing(
+            "legacy flat node set is incomplete",
+            f"missing {', '.join(absent)} beneath {legacy}",
+        )
     else:
         good("legacy flat node set", legacy)
     adk = os.path.join(FLOW, "adks", "freepdk-45nm", "configure.yml")
@@ -160,8 +173,7 @@ def expected_library_md5(reports):
         with open(path) as fh:
             digest = json.load(fh).get("stdcells_db_md5")
         if digest:
-            out.setdefault(digest, []).append(
-                os.path.basename(os.path.dirname(path)))
+            out.setdefault(digest, []).append(os.path.basename(os.path.dirname(path)))
     return out
 
 
@@ -176,10 +188,12 @@ def check_library(reports, build):
     if not expected:
         # Paste-able: the reports directory is an argument now, so a hint that
         # omits it sends the reader to an argparse error instead of a fix.
-        missing("no stdcells_db_md5 in any settings snapshot",
-                f"python {_show(HERE)}/extract_results.py "
-                f"--reports {_show(reports)} "
-                "--capture-settings VARIANT=<build-dir>, for a completed run")
+        missing(
+            "no stdcells_db_md5 in any settings snapshot",
+            f"python {_show(HERE)}/extract_results.py "
+            f"--reports {_show(reports)} "
+            "--capture-settings VARIANT=<build-dir>, for a completed run",
+        )
         return
     if len(expected) > 1:
         # Worth stopping for: two published runs did not use the same library.
@@ -187,17 +201,23 @@ def check_library(reports, build):
         missing("the committed runs disagree on stdcells.db", listing)
         return
     digest, variants = next(iter(expected.items()))
-    good("library recorded by the committed runs",
-         f"md5 {digest[:8]} across {len(variants)} runs")
+    good(
+        "library recorded by the committed runs",
+        f"md5 {digest[:8]} across {len(variants)} runs",
+    )
 
     if not build:
-        print(f"  (pass --build DIR after the ADK step to verify the fetched "
-              f"library against md5 {digest[:8]})")
+        print(
+            f"  (pass --build DIR after the ADK step to verify the fetched "
+            f"library against md5 {digest[:8]})"
+        )
         return
     found = glob.glob(os.path.join(build, "*", "inputs", "adk", "stdcells.db"))
     if not found:
-        missing(f"no fetched stdcells.db under {build}",
-                "run the ADK step first; the payload is not vendored, by licence")
+        missing(
+            f"no fetched stdcells.db under {build}",
+            "run the ADK step first; the payload is not vendored, by licence",
+        )
         return
     h = hashlib.md5()
     with open(found[0], "rb") as fh:
@@ -206,9 +226,11 @@ def check_library(reports, build):
     if h.hexdigest() == digest:
         good("fetched library matches the published runs", h.hexdigest()[:8])
     else:
-        missing("fetched stdcells.db does NOT match the published runs",
-                f"got {h.hexdigest()[:8]}, expected {digest[:8]} -- areas from "
-                "this library are not comparable with the committed set")
+        missing(
+            "fetched stdcells.db does NOT match the published runs",
+            f"got {h.hexdigest()[:8]}, expected {digest[:8]} -- areas from "
+            "this library are not comparable with the committed set",
+        )
 
 
 def check_variant(exports, variant):
@@ -223,14 +245,17 @@ def check_variant(exports, variant):
     """
     d = os.path.join(exports, variant)
     if not os.path.isdir(d):
-        missing(f"no RTL directory for {variant}",
-                f"expected {d} -- pass --exports for the right export root "
-                f"(TinyTPU's are dev/records/tinytpu/rtl_handoff, Gemmini's "
-                f"dev/records/tinytpu/gemmini_rtl)")
+        missing(
+            f"no RTL directory for {variant}",
+            f"expected {d} -- pass --exports for the right export root "
+            f"(TinyTPU's are dev/records/tinytpu/rtl_handoff, Gemmini's "
+            f"dev/records/tinytpu/gemmini_rtl)",
+        )
         return
     lists = [f for f in sorted(os.listdir(d)) if f.startswith("sv2v_manifest")]
-    count = len(glob.glob(os.path.join(d, "*.v"))) + \
-        len(glob.glob(os.path.join(d, "*.sv")))
+    count = len(glob.glob(os.path.join(d, "*.v"))) + len(
+        glob.glob(os.path.join(d, "*.sv"))
+    )
     if not count:
         missing(f"no RTL files for {variant}", f"{d} holds no .v or .sv")
         return
@@ -239,15 +264,21 @@ def check_variant(exports, variant):
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
-    ap.add_argument("--design", required=True,
-                    help="a design's synthesis directory, holding "
-                         "construct-commercial.py and reports/ "
-                         "(e.g. examples/tinytpu/asic_synthesis)")
-    ap.add_argument("--exports", required=True,
-                    help="the design's committed RTL exports, the directory "
-                         "holding one subdirectory per variant "
-                         "(e.g. dev/records/tinytpu/rtl_handoff). The same "
-                         "flag check_pairing.py takes")
+    ap.add_argument(
+        "--design",
+        required=True,
+        help="a design's synthesis directory, holding "
+        "construct-commercial.py and reports/ "
+        "(e.g. examples/tinytpu/asic_synthesis)",
+    )
+    ap.add_argument(
+        "--exports",
+        required=True,
+        help="the design's committed RTL exports, the directory "
+        "holding one subdirectory per variant "
+        "(e.g. dev/records/tinytpu/rtl_handoff). The same "
+        "flag check_pairing.py takes",
+    )
     ap.add_argument("--variant", default="T8_MAXDIM64")
     ap.add_argument("--build", help="a build directory, to verify the fetched ADK")
     args = ap.parse_args()
@@ -271,13 +302,16 @@ def main():
         print(f"  MISSING {what}\n            -> {fix}")
 
     if bad:
-        print(f"\n{len(bad)} prerequisite(s) missing; a run would fail. "
-              "Nothing was started.")
+        print(
+            f"\n{len(bad)} prerequisite(s) missing; a run would fail. "
+            "Nothing was started."
+        )
         return 1
 
     tools = _show(HERE)
     rel_reports = _show(reports)
-    print(f"""
+    print(
+        f"""
 Prerequisites present. The sequence, for {args.variant}:
 
   mkdir -p <build-dir> && cd <build-dir>
@@ -291,7 +325,8 @@ Then, back in the repository:
   python {tools}/extract_results.py --reports {rel_reports}
   python {tools}/check_numbers.py --reports {rel_reports}
 
-The licensed tool time is part of the cost and this script does not remove it.""")
+The licensed tool time is part of the cost and this script does not remove it."""
+    )
     return 0
 
 

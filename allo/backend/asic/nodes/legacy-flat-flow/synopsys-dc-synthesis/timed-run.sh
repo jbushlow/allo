@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 set -uo pipefail
 
 start_epoch=$(date +%s)

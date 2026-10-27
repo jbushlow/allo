@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Full-chip RTL and collateral assembly
 
 This node rewrites each selected concrete PE instance to the canonical hardened

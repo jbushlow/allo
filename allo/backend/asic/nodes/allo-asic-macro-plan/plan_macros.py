@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Select profitable RTL macro classes and package canonical representatives."""
 
 from __future__ import annotations
@@ -117,7 +120,9 @@ def module_instances(block: ModuleBlock, modules: set[str]) -> list[InstanceBloc
     return sorted(result, key=lambda item: item.start)
 
 
-def catapult_pipe_instances(block: ModuleBlock) -> list[tuple[InstanceBlock, dict[str, str]]]:
+def catapult_pipe_instances(
+    block: ModuleBlock,
+) -> list[tuple[InstanceBlock, dict[str, str]]]:
     """Return parameterized Catapult FIFO instances from a top module."""
     result = []
     pattern = re.compile(r"(?<![A-Za-z0-9_$])(ccs_pipe_v\d+)\s*#\s*\(")
@@ -148,9 +153,7 @@ def catapult_pipe_instances(block: ModuleBlock) -> list[tuple[InstanceBlock, dic
                         block.text[connection_open + 1 : connection_close]
                     ),
                 ),
-                named_connections(
-                    block.text[parameter_open + 1 : parameter_close]
-                ),
+                named_connections(block.text[parameter_open + 1 : parameter_close]),
             )
         )
     return result
@@ -173,7 +176,9 @@ def outer_module_for_member(pe: dict, inner_module: str) -> str:
     explicit_roots = []
     legacy_matches = []
     for record in pe.get("post_hls_records", []):
-        if any(item.get("name") == inner_module for item in record.get("rtl_modules", [])):
+        if any(
+            item.get("name") == inner_module for item in record.get("rtl_modules", [])
+        ):
             if record.get("rtl_root_module"):
                 explicit_roots.append(record["rtl_root_module"])
             legacy_matches.extend(
@@ -242,8 +247,13 @@ def find_owned_fifo(
         )
     fifo = matches[0]
     required = {
-        "clk", "reset", "if_read_ce", "if_write_ce", *FIFO_PRODUCER_PORTS.values(),
-        *FIFO_SHARED_PORTS.values(), *FIFO_CONSUMER_PORTS.values(),
+        "clk",
+        "reset",
+        "if_read_ce",
+        "if_write_ce",
+        *FIFO_PRODUCER_PORTS.values(),
+        *FIFO_SHARED_PORTS.values(),
+        *FIFO_CONSUMER_PORTS.values(),
     }
     missing = sorted(required - set(fifo.connections))
     if missing:
@@ -299,8 +309,19 @@ def find_owned_catapult_fifo(
         )
     fifo, parameters = matches[0]
     required = {
-        "clk", "en", "arst", "srst", "din", "din_vld", "din_rdy",
-        "dout", "dout_vld", "dout_rdy", "sz", "sz_req", "is_idle",
+        "clk",
+        "en",
+        "arst",
+        "srst",
+        "din",
+        "din_vld",
+        "din_rdy",
+        "dout",
+        "dout_vld",
+        "dout_rdy",
+        "sz",
+        "sz_req",
+        "is_idle",
     }
     missing = sorted(required - set(fifo.connections))
     if missing:
@@ -334,7 +355,9 @@ def find_owned_systemc_fifo(
         )
     fifo = matches[0]
     required = {
-        "clk", "rst", *SYSTEMC_FIFO_PRODUCER_PORTS.values(),
+        "clk",
+        "rst",
+        *SYSTEMC_FIFO_PRODUCER_PORTS.values(),
         *SYSTEMC_FIFO_CONSUMER_PORTS.values(),
     }
     missing = sorted(required - set(fifo.connections))
@@ -393,8 +416,7 @@ def generate_catapult_fifo_wrapper(
         else:
             fifo, parameters = find_owned_catapult_fifo(root, pe_instance, pipes)
         internal = {
-            suffix: f"_allo_fifo_in_{root}_{suffix}"
-            for suffix in producer_ports
+            suffix: f"_allo_fifo_in_{root}_{suffix}" for suffix in producer_ports
         }
         for suffix, name in internal.items():
             port = f"{root}_{suffix}"
@@ -417,14 +439,12 @@ def generate_catapult_fifo_wrapper(
         for port, expression in fifo.connections.items():
             if port in set(producer_ports.values()):
                 suffix = next(
-                    key for key, value in producer_ports.items()
-                    if value == port
+                    key for key, value in producer_ports.items() if value == port
                 )
                 connected = internal[suffix]
             elif port in set(consumer_ports.values()):
                 suffix = next(
-                    key for key, value in consumer_ports.items()
-                    if value == port
+                    key for key, value in consumer_ports.items() if value == port
                 )
                 connected = f"{root}_{suffix}"
             elif port in {"sz", "is_idle"}:
@@ -460,7 +480,9 @@ def generate_catapult_fifo_wrapper(
     lines.extend("  " + outer_decls[port] for port in outer_ports)
     lines.extend(internal_decls)
     lines.append(f"  {outer.name} producer_kernel (")
-    lines.append(",\n".join(f"    .{port}({pe_connections[port]})" for port in outer_ports))
+    lines.append(
+        ",\n".join(f"    .{port}({pe_connections[port]})" for port in outer_ports)
+    )
     lines.append("  );")
     lines.extend(fifo_text)
     lines.extend(["endmodule", ""])
@@ -470,8 +492,7 @@ def generate_catapult_fifo_wrapper(
     wrapper_decls = port_declarations(wrapper_block, outer_ports)
     for bundle in intent["stream_bundles"]:
         bundle["rtl_port_widths"] = {
-            port: declaration_width(wrapper_decls[port])
-            for port in bundle["rtl_ports"]
+            port: declaration_width(wrapper_decls[port]) for port in bundle["rtl_ports"]
         }
     folding = {
         "owned_fifos": owned,
@@ -521,7 +542,10 @@ def generate_fifo_wrapper(
         root = str(bundle["root"])
         fifo = find_owned_fifo(root, pe_instance, top_instances, blocks)
         for control_port in ("clk", "reset"):
-            if normalize_expression(fifo.connections[control_port]) not in pe_connection_values:
+            if (
+                normalize_expression(fifo.connections[control_port])
+                not in pe_connection_values
+            ):
                 raise ValueError(
                     f"FIFO {fifo.name} {control_port} does not match a producer-kernel "
                     "clock/reset connection"
@@ -594,15 +618,27 @@ def generate_fifo_wrapper(
         fifo_connections = []
         for fifo_port, expression in item["fifo_connections"].items():
             producer_suffix = next(
-                (suffix for suffix, name in FIFO_PRODUCER_PORTS.items() if name == fifo_port),
+                (
+                    suffix
+                    for suffix, name in FIFO_PRODUCER_PORTS.items()
+                    if name == fifo_port
+                ),
                 None,
             )
             shared_suffix = next(
-                (suffix for suffix, name in FIFO_SHARED_PORTS.items() if name == fifo_port),
+                (
+                    suffix
+                    for suffix, name in FIFO_SHARED_PORTS.items()
+                    if name == fifo_port
+                ),
                 None,
             )
             consumer_suffix = next(
-                (suffix for suffix, name in FIFO_CONSUMER_PORTS.items() if name == fifo_port),
+                (
+                    suffix
+                    for suffix, name in FIFO_CONSUMER_PORTS.items()
+                    if name == fifo_port
+                ),
                 None,
             )
             if producer_suffix:
@@ -634,8 +670,7 @@ def generate_fifo_wrapper(
                 for suffix in (*FIFO_SHARED_PORTS, *FIFO_CONSUMER_PORTS)
             ]
         bundle["rtl_port_widths"] = {
-            port: declaration_width(wrapper_decls[port])
-            for port in bundle["rtl_ports"]
+            port: declaration_width(wrapper_decls[port]) for port in bundle["rtl_ports"]
         }
     wrapper_port_set = set(port_names(wrapper_block))
     stream_ports = {
@@ -648,7 +683,8 @@ def generate_fifo_wrapper(
         port for port in remaining if port.startswith("ap_") and port != "ap_clk"
     ]
     intent["auxiliary_pins"] = [
-        port for port in remaining
+        port
+        for port in remaining
         if port not in intent["clock_pins"] and port not in intent["control_pins"]
     ]
     stream_sides = {item["side"] for item in intent["stream_bundles"]}
@@ -674,7 +710,11 @@ def generate_fifo_wrapper(
         extra = set(wrapper_decls) - wrapper_port_set
         if extra - removed_ports:
             raise ValueError(f"wrapper declaration mismatch: {sorted(extra)}")
-    return wrapper_text, {"owned_fifos": owned, "pin_intent": intent}, wrapper_connections
+    return (
+        wrapper_text,
+        {"owned_fifos": owned, "pin_intent": intent},
+        wrapper_connections,
+    )
 
 
 def port_names(block: ModuleBlock) -> list[str]:
@@ -688,7 +728,9 @@ def port_names(block: ModuleBlock) -> list[str]:
     raw = block.text[opening + 1 : closing]
     ports = [item.strip() for item in raw.split(",") if item.strip()]
     if not all(re.fullmatch(IDENT, port) for port in ports):
-        raise ValueError(f"module {block.name} does not use a simple non-ANSI port list")
+        raise ValueError(
+            f"module {block.name} does not use a simple non-ANSI port list"
+        )
     return ports
 
 
@@ -706,9 +748,7 @@ def port_declarations(block: ModuleBlock, ports: list[str]) -> dict[str, str]:
 
 
 def normalized_declaration(declaration: str) -> str:
-    return re.sub(
-        r"\b(?:wire|reg)\b", "", re.sub(r"\s+", " ", declaration)
-    ).strip()
+    return re.sub(r"\b(?:wire|reg)\b", "", re.sub(r"\s+", " ", declaration)).strip()
 
 
 STREAM_SUFFIXES = (
@@ -771,14 +811,16 @@ def stream_bundles(block: ModuleBlock) -> list[dict[str, object]]:
         systemc_triplet = {f"{root}_dat", f"{root}_vld", f"{root}_rdy"}
         if catapult_triplet.issubset(names):
             data_direction = (
-                "in" if declarations[f"{root}_rsc_dat"].lstrip().startswith("input")
+                "in"
+                if declarations[f"{root}_rsc_dat"].lstrip().startswith("input")
                 else "out"
             )
             direction = data_direction
             protocol = "catapult_ready_valid"
         elif systemc_triplet.issubset(names):
             data_direction = (
-                "in" if declarations[f"{root}_dat"].lstrip().startswith("input")
+                "in"
+                if declarations[f"{root}_dat"].lstrip().startswith("input")
                 else "out"
             )
             direction = data_direction
@@ -821,9 +863,7 @@ def semantic_stream_width(port: dict[str, object]) -> int | None:
     return int(scalar.group(1)) if scalar is not None else None
 
 
-def rtl_stream_width(
-    block: ModuleBlock, bundle: dict[str, object]
-) -> int | None:
+def rtl_stream_width(block: ModuleBlock, bundle: dict[str, object]) -> int | None:
     """Return the data payload width of one generated Vitis stream bundle."""
     ports = port_names(block)
     declarations = port_declarations(block, ports)
@@ -831,12 +871,14 @@ def rtl_stream_width(
     candidates = (
         [f"{root}_rsc_dat"]
         if bundle.get("protocol") == "catapult_ready_valid"
-        else [f"{root}_dat"]
-        if bundle.get("protocol") == "systemc_ready_valid"
         else (
-            [f"{root}_dout"]
-            if bundle["direction"] == "in"
-            else [f"{root}_din", root]
+            [f"{root}_dat"]
+            if bundle.get("protocol") == "systemc_ready_valid"
+            else (
+                [f"{root}_dout"]
+                if bundle["direction"] == "in"
+                else [f"{root}_din", root]
+            )
         )
     )
     data_port = next((name for name in candidates if name in declarations), None)
@@ -863,7 +905,9 @@ def ordered_semantic_port_subset(
 
     solutions: list[list[dict[str, object]]] = []
 
-    def search(bundle_index: int, semantic_index: int, selected: list[dict[str, object]]):
+    def search(
+        bundle_index: int, semantic_index: int, selected: list[dict[str, object]]
+    ):
         if len(solutions) > 1:
             return
         if bundle_index == len(bundles):
@@ -902,7 +946,9 @@ def ordered_rtl_bundle_subset(
 
     solutions: list[list[dict[str, object]]] = []
 
-    def search(semantic_index: int, bundle_index: int, selected: list[dict[str, object]]):
+    def search(
+        semantic_index: int, bundle_index: int, selected: list[dict[str, object]]
+    ):
         if len(solutions) > 1:
             return
         if semantic_index == len(semantic_ports):
@@ -1005,9 +1051,7 @@ def semantic_stream_pin_weight(port: dict) -> int:
         value = port.get(key)
         if isinstance(value, int) and value > 0:
             return value + 2
-    match = re.search(
-        r"(?:^|[<,\s])i(\d+)(?:[,>\s]|$)", str(port.get("type", ""))
-    )
+    match = re.search(r"(?:^|[<,\s])i(\d+)(?:[,>\s]|$)", str(port.get("type", "")))
     return (int(match.group(1)) if match is not None else 1) + 2
 
 
@@ -1091,9 +1135,7 @@ def graph_pin_sides(manifest: dict) -> dict[tuple[str, int], dict[str, str]]:
     """
     pes = {item["semantic_id"]: item for item in manifest.get("pe_instances", [])}
     result: dict[tuple[str, int], dict[str, str]] = {}
-    side_loads = {
-        pe_id: {side: 0 for side in ("N", "S", "E", "W")} for pe_id in pes
-    }
+    side_loads = {pe_id: {side: 0 for side in ("N", "S", "E", "W")} for pe_id in pes}
     deferred: dict[str, list[tuple[int, int, str]]] = {pe_id: [] for pe_id in pes}
     for channel in manifest.get("channels", []):
         endpoints = channel.get("endpoints", [])
@@ -1105,23 +1147,33 @@ def graph_pin_sides(manifest: dict) -> dict[tuple[str, int], dict[str, str]]:
             for access in accesses:
                 ordinal = int(access["port_ordinal"])
                 port = next(
-                    item for item in pe.get("ports", []) if int(item["ordinal"]) == ordinal
+                    item
+                    for item in pe.get("ports", [])
+                    if int(item["ordinal"]) == ordinal
                 )
-                explicit = str(port.get("desired_compass_direction", "unassigned")).upper()
+                explicit = str(
+                    port.get("desired_compass_direction", "unassigned")
+                ).upper()
                 weight = semantic_stream_pin_weight(port)
                 if explicit in {"N", "S", "E", "W"}:
                     side, method = explicit, "manifest_explicit"
-                elif peer is not None and pes[peer["pe"]].get("kernel") == pe.get("kernel"):
+                elif peer is not None and pes[peer["pe"]].get("kernel") == pe.get(
+                    "kernel"
+                ):
                     here = list(pe.get("pid", []))
                     there = list(pes[peer["pe"]].get("pid", []))
                     side = neighboring_pid_side(here, there)
                     if side is not None:
                         method = "same_kernel_neighbor"
                     else:
-                        deferred[pe_id].append((weight, ordinal, str(port.get("direction", ""))))
+                        deferred[pe_id].append(
+                            (weight, ordinal, str(port.get("direction", "")))
+                        )
                         continue
                 else:
-                    deferred[pe_id].append((weight, ordinal, str(port.get("direction", ""))))
+                    deferred[pe_id].append(
+                        (weight, ordinal, str(port.get("direction", "")))
+                    )
                     continue
                 result[(pe_id, ordinal)] = {"side": side, "method": method}
                 side_loads[pe_id][side] += weight
@@ -1142,7 +1194,8 @@ def graph_pin_sides(manifest: dict) -> dict[tuple[str, int], dict[str, str]]:
             side = min(
                 side_order,
                 key=lambda candidate: (
-                    side_loads[pe_id][candidate], side_order.index(candidate)
+                    side_loads[pe_id][candidate],
+                    side_order.index(candidate),
                 ),
             )
             result[(pe_id, ordinal)] = {
@@ -1161,15 +1214,16 @@ def build_pin_intent(
 ) -> dict[str, object]:
     pes = {item["semantic_id"]: item for item in manifest.get("pe_instances", [])}
     if representative not in pes:
-        raise ValueError(f"macro representative {representative} is absent from pe_instances")
+        raise ValueError(
+            f"macro representative {representative} is absent from pe_instances"
+        )
     pe = pes[representative]
     semantic_ports = sorted(pe.get("ports", []), key=lambda item: int(item["ordinal"]))
     bundles = stream_bundles(canonical)
     selection_method = "complete_process_interface"
     mapped_pairs = None
-    if (
-        len(bundles) > len(semantic_ports)
-        and all(item.get("protocol") == "systemc_ready_valid" for item in bundles)
+    if len(bundles) > len(semantic_ports) and all(
+        item.get("protocol") == "systemc_ready_valid" for item in bundles
     ):
         # Catapult may expose internal MatchLib service requests (for example a
         # memory request channel) beside the Allo streams.  Preserve those RTL
@@ -1186,7 +1240,8 @@ def build_pin_intent(
             if (
                 semantic is not None
                 and semantic.get("direction") == bundle["direction"]
-                and semantic_stream_width(semantic) == rtl_stream_width(canonical, bundle)
+                and semantic_stream_width(semantic)
+                == rtl_stream_width(canonical, bundle)
             ):
                 mapped_pairs.append((semantic, bundle))
                 semantic_index += 1
@@ -1211,9 +1266,7 @@ def build_pin_intent(
             )
         selection_method = "systemc_semantic_subsequence_with_auxiliary_bundles"
     elif len(bundles) != len(semantic_ports):
-        selected_bundles = ordered_rtl_bundle_subset(
-            canonical, semantic_ports, bundles
-        )
+        selected_bundles = ordered_rtl_bundle_subset(canonical, semantic_ports, bundles)
         if selected_bundles is not None:
             bundles = selected_bundles
             selection_method = "ordered_direction_width_rtl_subset"
@@ -1258,7 +1311,9 @@ def build_pin_intent(
                     )
                 direction = next(iter(bundle_directions))
                 candidates = [
-                    item for item in semantic_ports if item.get("direction") == direction
+                    item
+                    for item in semantic_ports
+                    if item.get("direction") == direction
                 ]
                 record_index = all_process_records.index(matching_records[0])
                 start = record_index * len(bundles)
@@ -1299,8 +1354,7 @@ def build_pin_intent(
     declarations = port_declarations(canonical, canonical_ports)
     for bundle in mapped:
         bundle["rtl_port_widths"] = {
-            port: declaration_width(declarations[port])
-            for port in bundle["rtl_ports"]
+            port: declaration_width(declarations[port]) for port in bundle["rtl_ports"]
         }
     remaining = [port for port in canonical_ports if port not in stream_rtl_ports]
     clock = [port for port in remaining if port in {"ap_clk", "clk"}]
@@ -1356,11 +1410,13 @@ def write_pin_intent_tcl(path: Path, intent: dict[str, object]) -> None:
                 bundle["rtl_ports"],
                 key=lambda port: (int(widths.get(port, 1)), port),
             )
-            split_bundles.append((
-                data_port,
-                int(widths.get(data_port, 1)),
-                [port for port in bundle["rtl_ports"] if port != data_port],
-            ))
+            split_bundles.append(
+                (
+                    data_port,
+                    int(widths.get(data_port, 1)),
+                    [port for port in bundle["rtl_ports"] if port != data_port],
+                )
+            )
             continue
         side_ports[bundle["side"]].extend(bundle["rtl_ports"])
         side_groups[bundle["side"]].append(list(bundle["rtl_ports"]))
@@ -1488,9 +1544,7 @@ def alias_wrapper(
     lines = [f"module {member.name} (", "  " + ",\n  ".join(ports), ");"]
     lines.extend(f"  {declarations[port]}" for port in ports)
     lines.append(f"  {canonical.name} canonical_macro (")
-    connections = [
-        f"    .{item['canonical']}({item['member']})" for item in mapping
-    ]
+    connections = [f"    .{item['canonical']}({item['member']})" for item in mapping]
     lines.append(",\n".join(connections))
     lines.extend(["  );", "endmodule", ""])
     return "\n".join(lines)
@@ -1508,7 +1562,9 @@ def dependency_closure(top: str, blocks: dict[str, ModuleBlock]) -> list[str]:
         for candidate in sorted(blocks):
             if candidate == name or candidate in closure:
                 continue
-            pattern = rf"\b{re.escape(candidate)}\b\s*(?:#\s*\([^;]*?\)\s*)?{IDENT}\s*\("
+            pattern = (
+                rf"\b{re.escape(candidate)}\b\s*(?:#\s*\([^;]*?\)\s*)?{IDENT}\s*\("
+            )
             if re.search(pattern, body, re.DOTALL):
                 pending.append(candidate)
     return closure
@@ -1606,7 +1662,9 @@ def canonical_folded_wrapper_contract(
     }
 
 
-def wrapper_interface_signature(wrapper_text: str, wrapper_name: str, folding: dict) -> str:
+def wrapper_interface_signature(
+    wrapper_text: str, wrapper_name: str, folding: dict
+) -> str:
     payload = canonical_folded_wrapper_contract(wrapper_text, wrapper_name, folding)
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -1724,7 +1782,7 @@ def main() -> None:
     selected = []
     replacements: dict[str, str] = {}
     removed: set[str] = set()
-    for group in ([] if bypassed else planning_groups):
+    for group in [] if bypassed else planning_groups:
         members = group.get("members", [])
         if group.get("proof", {}).get("status") != "proven":
             continue
@@ -1823,10 +1881,13 @@ def main() -> None:
             members = prepared_members
 
         canonical_name = module_names[0]
-        canonical_wrapper_name = f"allo_fifo_{entry_id}" if fold_fifos else canonical_name
+        canonical_wrapper_name = (
+            f"allo_fifo_{entry_id}" if fold_fifos else canonical_name
+        )
         canonical_text = (
             wrapper_text_by_module[canonical_name]
-            if fold_fifos else blocks[canonical_name].text
+            if fold_fifos
+            else blocks[canonical_name].text
         )
         canonical = module_blocks(canonical_text)[canonical_wrapper_name]
         entry_dir = batch_dir / "entries" / entry_id
@@ -1839,7 +1900,8 @@ def main() -> None:
                 module_blocks(wrapper_text_by_module[member_name])[
                     folding_by_module[member_name]["wrapper_module"]
                 ]
-                if fold_fifos else blocks[member_name]
+                if fold_fifos
+                else blocks[member_name]
             )
             mapping = validate_and_map_ports(canonical, member_block)
             port_maps[member_name] = mapping
@@ -1864,8 +1926,8 @@ def main() -> None:
         design_file.write_text(design_text.rstrip() + "\n")
         pin_intent = (
             folding_by_module[canonical_name]["pin_intent"]
-            if fold_fifos else
-            build_pin_intent(manifest, group["representative"], canonical, blocks)
+            if fold_fifos
+            else build_pin_intent(manifest, group["representative"], canonical, blocks)
         )
         clock_pins = pin_intent["clock_pins"]
         if len(clock_pins) != 1:
@@ -1874,9 +1936,7 @@ def main() -> None:
                 f"clock port (ap_clk or clk), found {clock_pins}"
             )
         constraints_file = entry_dir / "constraints.tcl"
-        write_constraints(
-            constraints_file, macro_clock_period, str(clock_pins[0])
-        )
+        write_constraints(constraints_file, macro_clock_period, str(clock_pins[0]))
         pin_intent_json = entry_dir / "pin-intent.json"
         pin_intent_tcl = entry_dir / "pin-intent.tcl"
         pin_intent_json.write_text(json.dumps(pin_intent, indent=2) + "\n")
@@ -1886,8 +1946,8 @@ def main() -> None:
             member_module = member["rtl_module"]
             member_intent = (
                 folding_by_module[member_module]["pin_intent"]
-                if fold_fifos else
-                build_pin_intent(
+                if fold_fifos
+                else build_pin_intent(
                     manifest, member["semantic_id"], blocks[member_module], blocks
                 )
             )
@@ -1960,7 +2020,8 @@ def main() -> None:
             "folded_wrapper_contract_hash": group.get("fifo_wrapper_signature"),
             "folded_wrapper_equivalence_method": (
                 "d4_semantic_contract_plus_unordered_fifo_contract"
-                if fold_fifos else None
+                if fold_fifos
+                else None
             ),
             "folded_fifo_count": sum(
                 len(item.get("fifo_folding", {}).get("owned_fifos", []))
@@ -2005,7 +2066,8 @@ def main() -> None:
             "enabled": fold_fifos,
             "ownership": "producer_put_side" if fold_fifos else "disabled",
             "wrapped_pe_instance_count": sum(
-                entry["reuse_count"] for entry in selected
+                entry["reuse_count"]
+                for entry in selected
                 if entry.get("fold_fifos_into_macro")
             ),
             "folded_fifo_instance_count": sum(
@@ -2017,7 +2079,9 @@ def main() -> None:
     index_text = json.dumps(plan, indent=2) + "\n"
     (batch_dir / "index.json").write_text(index_text)
     (outputs / "macro-plan.json").write_text(index_text)
-    shutil.copy2("inputs/asic-manifest-final.json", batch_dir / "asic-manifest-final.json")
+    shutil.copy2(
+        "inputs/asic-manifest-final.json", batch_dir / "asic-manifest-final.json"
+    )
     shutil.copy2("inputs/build-metadata.json", batch_dir / "build-metadata.json")
 
     tcl_lines = [

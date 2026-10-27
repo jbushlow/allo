@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Tests for hardened-macro publication validation."""
 
 import importlib.util
@@ -33,9 +36,7 @@ class PublishMacrosTest(unittest.TestCase):
                 PUBLISH.main()
             finally:
                 os.chdir(previous)
-            registry = json.loads(
-                (root / "outputs/macro-registry.json").read_text()
-            )
+            registry = json.loads((root / "outputs/macro-registry.json").read_text())
             self.assertTrue(registry["bypass_macro_generation"])
             self.assertEqual(registry["implementation_style"], "flat")
             self.assertEqual(registry["macro_count"], 0)
@@ -44,9 +45,7 @@ class PublishMacrosTest(unittest.TestCase):
     def test_accepts_complete_d4_symmetry(self):
         with tempfile.TemporaryDirectory() as temporary:
             lef = Path(temporary) / "macro.lef"
-            lef.write_text(
-                "MACRO pe\n  CLASS BLOCK ;\n  SYMMETRY X Y R90 ;\nEND pe\n"
-            )
+            lef.write_text("MACRO pe\n  CLASS BLOCK ;\n  SYMMETRY X Y R90 ;\nEND pe\n")
             self.assertEqual(PUBLISH.lef_symmetries(lef, "pe"), ["X", "Y", "R90"])
 
     def test_rejects_missing_rotation_or_wrong_macro(self):
@@ -59,20 +58,25 @@ class PublishMacrosTest(unittest.TestCase):
                 PUBLISH.lef_symmetries(lef, "other")
 
     def test_preserves_hls_proof_and_rtl_audit_provenance(self):
-        provenance = PUBLISH.equivalence_provenance({
-            "implementation_contract_hash": "contract123",
-            "equivalence_method": "specialized_mlir_emitted_hls_contract",
-            "rtl_audit_status": "agree",
-            "rtl_audit_hashes": ["rtl123"],
-            "rtl_hash": "rtl123",
-        })
-        self.assertEqual(provenance, {
-            "implementation_contract_hash": "contract123",
-            "equivalence_method": "specialized_mlir_emitted_hls_contract",
-            "rtl_audit_status": "agree",
-            "rtl_audit_hashes": ["rtl123"],
-            "rtl_hash": "rtl123",
-        })
+        provenance = PUBLISH.equivalence_provenance(
+            {
+                "implementation_contract_hash": "contract123",
+                "equivalence_method": "specialized_mlir_emitted_hls_contract",
+                "rtl_audit_status": "agree",
+                "rtl_audit_hashes": ["rtl123"],
+                "rtl_hash": "rtl123",
+            }
+        )
+        self.assertEqual(
+            provenance,
+            {
+                "implementation_contract_hash": "contract123",
+                "equivalence_method": "specialized_mlir_emitted_hls_contract",
+                "rtl_audit_status": "agree",
+                "rtl_audit_hashes": ["rtl123"],
+                "rtl_hash": "rtl123",
+            },
+        )
 
 
 if __name__ == "__main__":

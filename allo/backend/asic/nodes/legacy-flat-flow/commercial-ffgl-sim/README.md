@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Commercial functional gate-level simulation
 
 Runs the mapped synthesis netlist with ADK and optional SRAM functional models.

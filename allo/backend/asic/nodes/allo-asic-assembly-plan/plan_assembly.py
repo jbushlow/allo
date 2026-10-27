@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Validate Stage-1 products and plan full-chip macro substitution."""
 
 from __future__ import annotations
@@ -14,8 +17,7 @@ IDENT = r"[A-Za-z_$][A-Za-z0-9_$]*"
 MODULE_RE = re.compile(rf"(?<![A-Za-z0-9_$])module\s+(?P<name>{IDENT})\b")
 ENDMODULE_RE = re.compile(r"(?<![A-Za-z0-9_$])endmodule\b")
 INSTANCE_RE = re.compile(
-    rf"(?m)(?<![A-Za-z0-9_$])(?P<module>{IDENT})\s+"
-    rf"(?P<instance>{IDENT})\s*\("
+    rf"(?m)(?<![A-Za-z0-9_$])(?P<module>{IDENT})\s+" rf"(?P<instance>{IDENT})\s*\("
 )
 REQUIRED_VIEWS = {"verilog", "liberty", "db", "lef", "gds"}
 
@@ -63,7 +65,9 @@ def elaborated_instance_paths(
     children: dict[str, list[tuple[str, str]]] = {name: [] for name in blocks}
     for child, instances in instances_by_module.items():
         for instance in instances:
-            children[instance["parent_module"]].append((instance["instance_name"], child))
+            children[instance["parent_module"]].append(
+                (instance["instance_name"], child)
+            )
     result: dict[tuple[str, str, str], list[str]] = {}
 
     def visit(module: str, path: str, ancestry: tuple[str, ...]) -> None:
@@ -136,44 +140,62 @@ def main() -> None:
         canonical = macro["top_module"]
         folding_enabled = bool(macro.get("fold_fifos_into_macro", False))
         if canonical not in blocks and not folding_enabled:
-            raise ValueError(f"canonical module is absent from normalized RTL: {canonical}")
+            raise ValueError(
+                f"canonical module is absent from normalized RTL: {canonical}"
+            )
         missing_views = REQUIRED_VIEWS - set(macro.get("views", {}))
         if missing_views:
-            raise ValueError(f"{class_id} lacks required views: {sorted(missing_views)}")
+            raise ValueError(
+                f"{class_id} lacks required views: {sorted(missing_views)}"
+            )
         for view, detail in macro["views"].items():
             path = inputs / "macro-registry" / detail["path"]
             if not path.is_file() or path.stat().st_size == 0:
-                raise ValueError(f"missing published {view} view for {class_id}: {path}")
+                raise ValueError(
+                    f"missing published {view} view for {class_id}: {path}"
+                )
         member_records = []
         placement_by_module = {
-            item.get("rtl_module"): item
-            for item in macro.get("member_placements", [])
+            item.get("rtl_module"): item for item in macro.get("member_placements", [])
         }
         for member in members:
             source_module = member["rtl_module"]
             if source_module in replaced_modules:
-                raise ValueError(f"RTL module assigned to multiple classes: {source_module}")
+                raise ValueError(
+                    f"RTL module assigned to multiple classes: {source_module}"
+                )
             replaced_modules.add(source_module)
             if source_module not in blocks:
-                raise ValueError(f"selected member module absent from RTL: {source_module}")
+                raise ValueError(
+                    f"selected member module absent from RTL: {source_module}"
+                )
             instances = instances_by_module[source_module]
             requested_instance = member.get("source_instance")
             if requested_instance:
                 instances = [
-                    item for item in instances
+                    item
+                    for item in instances
                     if item["instance_name"] == requested_instance
                 ]
             if not instances:
-                raise ValueError(f"selected member module is never instantiated: {source_module}")
+                raise ValueError(
+                    f"selected member module is never instantiated: {source_module}"
+                )
             raw_map = macro.get("port_maps", {}).get(source_module)
             if not raw_map:
                 raise ValueError(f"missing canonical port map for {source_module}")
-            member_to_canonical = {item["member"]: item["canonical"] for item in raw_map}
+            member_to_canonical = {
+                item["member"]: item["canonical"] for item in raw_map
+            }
             if len(member_to_canonical) != len(raw_map):
                 raise ValueError(f"duplicate member port in map for {source_module}")
             for instance in instances:
                 paths = hierarchy_paths.get(
-                    (instance["parent_module"], instance["instance_name"], source_module),
+                    (
+                        instance["parent_module"],
+                        instance["instance_name"],
+                        source_module,
+                    ),
                     [],
                 )
                 if not paths:
@@ -225,7 +247,9 @@ def main() -> None:
     pe_ids = {item["semantic_id"] for item in manifest.get("pe_instances", [])}
     connections = []
     for channel in manifest.get("channels", []):
-        endpoints = [item for item in channel.get("endpoints", []) if item.get("pe") in pe_ids]
+        endpoints = [
+            item for item in channel.get("endpoints", []) if item.get("pe") in pe_ids
+        ]
         if endpoints:
             connections.append(
                 {
@@ -233,14 +257,17 @@ def main() -> None:
                     "stream": channel.get("stream"),
                     "type": channel.get("type"),
                     "endpoints": endpoints,
-                    "cross_kernel": len({
-                        next(
-                            pe.get("kernel")
-                            for pe in manifest.get("pe_instances", [])
-                            if pe["semantic_id"] == endpoint["pe"]
-                        )
-                        for endpoint in endpoints
-                    }) > 1,
+                    "cross_kernel": len(
+                        {
+                            next(
+                                pe.get("kernel")
+                                for pe in manifest.get("pe_instances", [])
+                                if pe["semantic_id"] == endpoint["pe"]
+                            )
+                            for endpoint in endpoints
+                        }
+                    )
+                    > 1,
                 }
             )
     plan = {
@@ -248,9 +275,7 @@ def main() -> None:
         "stage": "full_chip_assembly_plan",
         "top_module": expected_top,
         "backend": backend,
-        "bypass_macro_generation": bool(
-            registry.get("bypass_macro_generation", False)
-        ),
+        "bypass_macro_generation": bool(registry.get("bypass_macro_generation", False)),
         "implementation_style": registry.get(
             "implementation_style", "hierarchical_macros"
         ),

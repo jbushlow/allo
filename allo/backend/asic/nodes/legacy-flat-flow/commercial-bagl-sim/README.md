@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Commercial back-annotated gate-level simulation
 
 Runs the routed netlist with top-level SDF, ADK models, optional SRAM models,

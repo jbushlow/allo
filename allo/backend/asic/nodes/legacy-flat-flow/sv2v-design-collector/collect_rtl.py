@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Collect an ordered RTL closure and optionally normalize it with sv2v."""
 
 from __future__ import annotations
@@ -46,8 +49,11 @@ def source_files(path: Path) -> list[Path]:
         return [path.resolve()]
     if path.is_dir():
         return sorted(
-            (item.resolve() for item in path.iterdir()
-             if item.is_file() and item.suffix.lower() in {".v", ".sv"}),
+            (
+                item.resolve()
+                for item in path.iterdir()
+                if item.is_file() and item.suffix.lower() in {".v", ".sv"}
+            ),
             key=str,
         )
     raise FileNotFoundError(f"RTL manifest entry does not exist: {path}")
@@ -86,7 +92,9 @@ def relative_source_path(path: Path, design_root: Path) -> Path:
         return Path("external") / token / path.name
 
 
-def copy_source_closure(files: list[Path], include_dirs: list[Path], design_root: Path) -> dict[Path, Path]:
+def copy_source_closure(
+    files: list[Path], include_dirs: list[Path], design_root: Path
+) -> dict[Path, Path]:
     destination = OUTPUTS / "rtl-source-package"
     shutil.rmtree(destination, ignore_errors=True)
     destination.mkdir(parents=True)
@@ -181,8 +189,13 @@ def main() -> None:
 
     log_lines = []
     if normalize:
-        completed = subprocess.run(command, text=True, stdout=subprocess.PIPE,
-                                   stderr=subprocess.STDOUT, check=False)
+        completed = subprocess.run(
+            command,
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
         log_lines.extend(["Running: " + shlex.join(command), completed.stdout])
         if completed.returncode:
             (OUTPUTS / "sv2v.log").write_text("\n".join(log_lines))
@@ -206,7 +219,9 @@ def main() -> None:
         raise ValueError(f"normalized RTL does not contain top module {top}")
     duplicates = sorted(name for name in set(modules) if modules.count(name) > 1)
     if duplicates:
-        raise ValueError("normalized RTL contains duplicate modules: " + ", ".join(duplicates))
+        raise ValueError(
+            "normalized RTL contains duplicate modules: " + ", ".join(duplicates)
+        )
 
     normalized = OUTPUTS / "normalized-rtl"
     normalized.mkdir(exist_ok=True)
@@ -226,8 +241,7 @@ def main() -> None:
             if parent not in include_parents:
                 include_parents.append(parent)
         rtl_filelist.extend(
-            f"+incdir+inputs/rtl-source-package/{parent}"
-            for parent in include_parents
+            f"+incdir+inputs/rtl-source-package/{parent}" for parent in include_parents
         )
         rtl_filelist.extend(
             f"inputs/rtl-source-package/{copied[path]}" for path in files
@@ -240,25 +254,47 @@ def main() -> None:
         ]
         rtl_defines = defines
     (OUTPUTS / "rtl-sources.f").write_text("\n".join(rtl_filelist) + "\n")
-    (OUTPUTS / "rtl-sources.tcl").write_text("\n".join([
-        f"set rtl_source_files {tcl_list(rtl_source_files)}",
-        f"set rtl_include_dirs {tcl_list(rtl_include_dirs)}",
-        f"set rtl_defines {tcl_list(rtl_defines)}",
-    ]) + "\n")
+    (OUTPUTS / "rtl-sources.tcl").write_text(
+        "\n".join(
+            [
+                f"set rtl_source_files {tcl_list(rtl_source_files)}",
+                f"set rtl_include_dirs {tcl_list(rtl_include_dirs)}",
+                f"set rtl_defines {tcl_list(rtl_defines)}",
+            ]
+        )
+        + "\n"
+    )
     version = "unavailable"
     if normalize:
-        probe = subprocess.run([sv2v_bin, "--version"], text=True,
-                               stdout=subprocess.PIPE, stderr=subprocess.STDOUT, check=False)
+        probe = subprocess.run(
+            [sv2v_bin, "--version"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            check=False,
+        )
         version = probe.stdout.strip() or "unavailable"
     metadata = {
-        "schema_version": 1, "top_module": top,
-        "design_root": str(design_root), "manifest": str(manifest),
-        "normalize_rtl": normalize, "sv2v_bin": sv2v_bin,
-        "sv2v_version": version, "defines": defines,
+        "schema_version": 1,
+        "top_module": top,
+        "design_root": str(design_root),
+        "manifest": str(manifest),
+        "normalize_rtl": normalize,
+        "sv2v_bin": sv2v_bin,
+        "sv2v_version": version,
+        "defines": defines,
         "include_directories": [str(path) for path in include_dirs],
-        "sources": [{"path": str(path), "packaged_path": str(copied[path]), "sha256": digest(path)} for path in files],
+        "sources": [
+            {
+                "path": str(path),
+                "packaged_path": str(copied[path]),
+                "sha256": digest(path),
+            }
+            for path in files
+        ],
         "excluded_sources": [str(path) for path in excluded],
-        "design_v_sha256": digest(design), "module_count": len(modules),
+        "design_v_sha256": digest(design),
+        "module_count": len(modules),
     }
     (OUTPUTS / "rtl-collection.json").write_text(json.dumps(metadata, indent=2) + "\n")
     (OUTPUTS / "sv2v.log").write_text("\n".join(log_lines).rstrip() + "\n")

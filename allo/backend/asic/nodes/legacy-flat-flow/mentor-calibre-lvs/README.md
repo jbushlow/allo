@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 This node: 
 * Accepts an additional file of SVRF statements as an input (rules.svrf). The most common use case here would be to add LVS BOX commands to blackbox hard macros present in the design
 

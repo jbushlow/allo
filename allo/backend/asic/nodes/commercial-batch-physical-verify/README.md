@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Commercial batch physical verification
 
 This node runs Calibre DRC and LVS for every hardened macro. Macro classes run

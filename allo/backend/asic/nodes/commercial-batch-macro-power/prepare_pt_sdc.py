@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Prepare an Innovus timing-constraint export for PrimeTime.
 
 Innovus's signoff interpretation keeps generated zero-delay primary inputs at
@@ -43,9 +46,7 @@ def main() -> None:
     prepared = prepare_sdc(source)
     args.output_sdc.write_text(prepared)
 
-    input_count = sum(
-        1 for line in source.splitlines() if SET_INPUT_DELAY.match(line)
-    )
+    input_count = sum(1 for line in source.splitlines() if SET_INPUT_DELAY.match(line))
     prepared_count = prepared.count("-source_latency_included")
     if input_count == 0:
         raise RuntimeError("input SDC contains no set_input_delay commands")

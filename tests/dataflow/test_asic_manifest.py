@@ -128,8 +128,7 @@ endmodule
     )
     _write(
         project / "run.tcl",
-        "directive set -CLOCK_PERIOD 8.0\n"
-        "solution library add nangate-45nm_beh\n",
+        "directive set -CLOCK_PERIOD 8.0\n" "solution library add nangate-45nm_beh\n",
     )
     _write(
         rtl / "catapult.log",
@@ -962,9 +961,9 @@ def test_emit_final_uses_the_integrated_systemc_path(tmp_path):
     _write(project / "asic-manifest.json", json.dumps(pre))
     rtl = _systemc_fixture(project)
 
-    final = asic_manifest.emit_final(str(project), {
-        "asic_manifest": dict(MANIFEST_CONFIG)
-    }, "systemc")
+    final = asic_manifest.emit_final(
+        str(project), {"asic_manifest": dict(MANIFEST_CONFIG)}, "systemc"
+    )
 
     assert final["backend"] == "systemc"
     assert final["summary"]["matched"] == 1

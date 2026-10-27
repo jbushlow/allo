@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Allo functional gate-level simulation
 
 This node runs the generated self-checking Allo testbench against the mapped

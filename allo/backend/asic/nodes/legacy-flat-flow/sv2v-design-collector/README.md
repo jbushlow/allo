@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Generic RTL collection and normalization
 
 This node preserves the existing `design_path`, `manifest`,

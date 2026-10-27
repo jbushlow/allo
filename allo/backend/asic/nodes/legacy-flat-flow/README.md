@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Legacy flat RTL flow nodes
 
 These nodes support historical constructors that consume an existing RTL file

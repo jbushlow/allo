@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Validate and publish the hardened canonical macro registry."""
 
 from __future__ import annotations
@@ -85,7 +88,9 @@ def main() -> None:
         source_class_id = entry.get("source_macro_class_id", class_id)
         if source_class_id not in manifest_classes:
             raise ValueError(f"signoff entry {class_id} is absent from ASIC manifest")
-        if entry.get("reuse_count", 0) > manifest_classes[source_class_id].get("member_count", 0):
+        if entry.get("reuse_count", 0) > manifest_classes[source_class_id].get(
+            "member_count", 0
+        ):
             raise ValueError(f"reuse count changed for {class_id}")
         destination = output_root / class_id
         destination.mkdir()
@@ -96,7 +101,9 @@ def main() -> None:
                 raise ValueError(f"{class_id} does not publish required {view} view")
             source = source_root / relative
             if not source.is_file() or source.stat().st_size == 0:
-                raise ValueError(f"missing or empty {view} view for {class_id}: {source}")
+                raise ValueError(
+                    f"missing or empty {view} view for {class_id}: {source}"
+                )
             suffix = source.name.split("macro", 1)[-1]
             target = destination / f"{entry['top_module']}{suffix}"
             shutil.copy2(source, target)
@@ -132,9 +139,7 @@ def main() -> None:
             "members": entry["members"],
             "member_placements": entry.get("member_placements", []),
             "port_maps": entry["port_maps"],
-            "fold_fifos_into_macro": bool(
-                entry.get("fold_fifos_into_macro", False)
-            ),
+            "fold_fifos_into_macro": bool(entry.get("fold_fifos_into_macro", False)),
             "folded_fifo_count": int(entry.get("folded_fifo_count", 0)),
             "lef_symmetry": symmetry,
             "views": view_records,
@@ -173,7 +178,9 @@ def main() -> None:
         key = item["macro_class_id"]
         if not re.fullmatch(r"[A-Za-z0-9_.:-]+", key):
             raise ValueError(f"macro class ID is not Tcl-array safe: {key}")
-        tcl.append(f"set allo_asic_hardened_macro_top({key}) {tcl_quote(item['top_module'])}")
+        tcl.append(
+            f"set allo_asic_hardened_macro_top({key}) {tcl_quote(item['top_module'])}"
+        )
         tcl.append(f"set allo_asic_hardened_macro_reuse({key}) {item['reuse_count']}")
         tcl.append(
             f"set allo_asic_hardened_macro_lef_symmetry({key}) "

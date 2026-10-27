@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Coalesce untapped row markers into a bounded set of Innovus row cuts."""
 
 from __future__ import annotations
@@ -51,9 +54,7 @@ def main() -> None:
                 "incr allo_adaptive_welltap_cut_count",
             ]
         )
-        report.append(
-            f"cut {index} {x1:.6f} {y1:.6f} {x2:.6f} {y2:.6f}"
-        )
+        report.append(f"cut {index} {x1:.6f} {y1:.6f} {x2:.6f} {y2:.6f}")
     tcl_path.write_text("\n".join(tcl) + "\n")
     report_path.write_text("\n".join(report) + "\n")
 

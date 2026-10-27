@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 set -euo pipefail
 if [[ -f "inputs/adk/${drc_env_setup}" ]]; then source "inputs/adk/${drc_env_setup}"; fi
 envsubst < drc.runset.template > drc.runset

@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Run timing signoff and Liberty/DB extraction for each hardened macro."""
 
 from __future__ import annotations
@@ -147,7 +150,10 @@ def run_entry(entry: dict) -> dict:
         shutil.copy2(expected["sdf"], views / "macro.sdf")
         shutil.copy2(expected["lib"], views / "macro.lib")
         shutil.copy2(expected["db"], views / "macro.db")
-        for source_dir, prefix in [(timing / "reports", "timing"), (libdb / "reports", "lib")]:
+        for source_dir, prefix in [
+            (timing / "reports", "timing"),
+            (libdb / "reports", "lib"),
+        ]:
             for source in source_dir.glob("*"):
                 if source.is_file():
                     shutil.copy2(source, reports / f"{prefix}-{source.name}")
@@ -202,22 +208,49 @@ def main() -> None:
     WORK_ROOT.mkdir()
     if not entries:
         output_index = {
-            **{key: value for key, value in index.items() if key not in {"entries", "status"}},
-            "stage": "signoff", "entries": [], "status": [],
+            **{
+                key: value
+                for key, value in index.items()
+                if key not in {"entries", "status"}
+            },
+            "stage": "signoff",
+            "entries": [],
+            "status": [],
         }
-        (OUTPUT_BATCH / "index.json").write_text(json.dumps(output_index, indent=2) + "\n")
-        status_doc = {"status": "bypassed", "total": 0, "passed": 0, "failed": 0, "entries": []}
-        (ROOT / "outputs" / "signoff-status.json").write_text(json.dumps(status_doc, indent=2) + "\n")
+        (OUTPUT_BATCH / "index.json").write_text(
+            json.dumps(output_index, indent=2) + "\n"
+        )
+        status_doc = {
+            "status": "bypassed",
+            "total": 0,
+            "passed": 0,
+            "failed": 0,
+            "entries": [],
+        }
+        (ROOT / "outputs" / "signoff-status.json").write_text(
+            json.dumps(status_doc, indent=2) + "\n"
+        )
         metrics = {
-            "schema_version": 1, "node": "commercial-batch-signoff", "status": "bypassed",
-            "wall_seconds": round(time.monotonic() - batch_start, 3), "workers": [],
-            "aggregate": {"worker_count": 0, "maximum_worker_seconds": 0.0, "sum_worker_seconds": 0.0},
+            "schema_version": 1,
+            "node": "commercial-batch-signoff",
+            "status": "bypassed",
+            "wall_seconds": round(time.monotonic() - batch_start, 3),
+            "workers": [],
+            "aggregate": {
+                "worker_count": 0,
+                "maximum_worker_seconds": 0.0,
+                "sum_worker_seconds": 0.0,
+            },
         }
-        (ROOT / "outputs" / "macro-signoff-metrics.json").write_text(json.dumps(metrics, indent=2) + "\n")
+        (ROOT / "outputs" / "macro-signoff-metrics.json").write_text(
+            json.dumps(metrics, indent=2) + "\n"
+        )
         print("Macro signoff bypassed: batch contains zero entries.")
         return
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(entries)) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(entries)
+        ) as executor:
             statuses = list(executor.map(run_entry, entries))
     finally:
         emit_worker_logs(entries)
@@ -228,7 +261,11 @@ def main() -> None:
         if entry["id"] in passed
     ]
     output_index = {
-        **{key: value for key, value in index.items() if key not in {"entries", "status"}},
+        **{
+            key: value
+            for key, value in index.items()
+            if key not in {"entries", "status"}
+        },
         "stage": "signoff",
         "entries": output_entries,
         "status": statuses,

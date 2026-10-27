@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Small dependency-free stream-graph macro placer.
 
 The optimization lattice is deliberately coarse.  It is not the Innovus site
@@ -77,12 +80,16 @@ def _boundary_cost(
             distances.append(position[1] - y0)
         elif side == "N":
             distances.append(y1 - position[1] - sizes[name][1])
-    return sum(max(0.0, value) for value in distances) / max(1.0, len(distances) * scale)
+    return sum(max(0.0, value) for value in distances) / max(
+        1.0, len(distances) * scale
+    )
 
 
 def _logical_seed(items: list[dict], pitch: float) -> dict[str, tuple[int, int]]:
     """Seed all macros together from PID coordinates and boundary semantics."""
-    scale = max(2, math.ceil(max(max(item["width"], item["height"]) for item in items) / pitch))
+    scale = max(
+        2, math.ceil(max(max(item["width"], item["height"]) for item in items) / pitch)
+    )
     two_dimensional = [item for item in items if len(item.get("pid", ())) >= 2]
     if two_dimensional:
         rows = [item["pid"][-2] for item in two_dimensional]
@@ -177,10 +184,15 @@ def _grid_level(
         left_center = _center(positions[left], sizes[left])
         right_center = _center(positions[right], sizes[right])
         wire += edge["weight"] * (
-            abs(left_center[0] - right_center[0]) + abs(left_center[1] - right_center[1])
+            abs(left_center[0] - right_center[0])
+            + abs(left_center[1] - right_center[1])
         )
         direction += _direction_cost(
-            positions[left], sizes[left], positions[right], sizes[right], edge.get("direction")
+            positions[left],
+            sizes[left],
+            positions[right],
+            sizes[right],
+            edge.get("direction"),
         )
 
     bounds = _bbox(positions, sizes)
@@ -191,7 +203,13 @@ def _grid_level(
 
     boundary = _boundary_cost(positions, sizes, kernels)
 
-    def total(candidate_wire, candidate_overlap, candidate_area, candidate_direction, candidate_boundary):
+    def total(
+        candidate_wire,
+        candidate_overlap,
+        candidate_area,
+        candidate_direction,
+        candidate_boundary,
+    ):
         return (
             candidate_wire / wire_reference
             + candidate_area / footprint
@@ -205,7 +223,9 @@ def _grid_level(
     queued = set(names)
     evaluations = accepted = 0
     maximum_evaluations = max(1, max_passes) * max(1, len(names))
-    move_steps = tuple(sorted({1, 2, 4, max(1, round(math.sqrt(len(names)) / 2))}, reverse=True))
+    move_steps = tuple(
+        sorted({1, 2, 4, max(1, round(math.sqrt(len(names)) / 2))}, reverse=True)
+    )
 
     while active and evaluations < maximum_evaluations:
         name = active.popleft()
@@ -215,11 +235,22 @@ def _grid_level(
         old_cells = set(_cells(old_position, sizes[name]))
         best = None
         for step in move_steps:
-            for dx, dy in ((step, 0), (-step, 0), (0, step), (0, -step), (step, step), (step, -step), (-step, step), (-step, -step)):
+            for dx, dy in (
+                (step, 0),
+                (-step, 0),
+                (0, step),
+                (0, -step),
+                (step, step),
+                (step, -step),
+                (-step, step),
+                (-step, -step),
+            ):
                 new_position = (old_position[0] + dx, old_position[1] + dy)
                 new_cells = set(_cells(new_position, sizes[name]))
                 changed_cells = old_cells | new_cells
-                old_overlap = sum(_overlap_cost(occupancy[cell]) for cell in changed_cells)
+                old_overlap = sum(
+                    _overlap_cost(occupancy[cell]) for cell in changed_cells
+                )
                 new_overlap_local = 0
                 for cell in changed_cells:
                     count = occupancy[cell] - (cell in old_cells) + (cell in new_cells)
@@ -246,9 +277,17 @@ def _grid_level(
                         - abs(before_left_center[1] - before_right_center[1])
                     )
                     candidate_direction += _direction_cost(
-                        after_left, sizes[left], after_right, sizes[right], edge.get("direction")
+                        after_left,
+                        sizes[left],
+                        after_right,
+                        sizes[right],
+                        edge.get("direction"),
                     ) - _direction_cost(
-                        before_left, sizes[left], before_right, sizes[right], edge.get("direction")
+                        before_left,
+                        sizes[left],
+                        before_right,
+                        sizes[right],
+                        edge.get("direction"),
                     )
 
                 trial_positions = positions
@@ -271,16 +310,18 @@ def _grid_level(
                         max(bounds[2], new_position[0] + sizes[name][0]),
                         max(bounds[3], new_position[1] + sizes[name][1]),
                     )
-                candidate_area = (
-                    (candidate_bounds[2] - candidate_bounds[0])
-                    * (candidate_bounds[3] - candidate_bounds[1])
+                candidate_area = (candidate_bounds[2] - candidate_bounds[0]) * (
+                    candidate_bounds[3] - candidate_bounds[1]
                 )
                 if trial_positions is positions:
                     trial_positions = dict(positions)
                     trial_positions[name] = new_position
                 candidate_boundary = _boundary_cost(trial_positions, sizes, kernels)
                 candidate_cost = total(
-                    candidate_wire, candidate_overlap, candidate_area, candidate_direction,
+                    candidate_wire,
+                    candidate_overlap,
+                    candidate_area,
+                    candidate_direction,
                     candidate_boundary,
                 )
                 improvement = cost - candidate_cost
@@ -306,8 +347,18 @@ def _grid_level(
             continue
 
         (
-            cost, _distance, _x, _y, new_position, new_cells, wire, overlap,
-            area, direction, boundary, bounds,
+            cost,
+            _distance,
+            _x,
+            _y,
+            new_position,
+            new_cells,
+            wire,
+            overlap,
+            area,
+            direction,
+            boundary,
+            bounds,
         ) = best
         for cell in old_cells - new_cells:
             occupancy[cell] -= 1
@@ -323,7 +374,11 @@ def _grid_level(
 
         affected = {name}
         affected.update(
-            edges[index]["right"] if edges[index]["left"] == name else edges[index]["left"]
+            (
+                edges[index]["right"]
+                if edges[index]["left"] == name
+                else edges[index]["left"]
+            )
             for index in adjacency[name]
         )
         for cell in old_cells | new_cells:
@@ -334,8 +389,7 @@ def _grid_level(
                 queued.add(affected_name)
 
     physical = {
-        name: (positions[name][0] * pitch, positions[name][1] * pitch)
-        for name in names
+        name: (positions[name][0] * pitch, positions[name][1] * pitch) for name in names
     }
     return physical, {
         "pitch": pitch,
@@ -352,7 +406,9 @@ def _grid_level(
     }
 
 
-def _rectangles_overlap(left: dict, right: dict, separation_x: float, separation_y: float) -> bool:
+def _rectangles_overlap(
+    left: dict, right: dict, separation_x: float, separation_y: float
+) -> bool:
     return not (
         left["x"] + left["width"] + separation_x <= right["x"]
         or right["x"] + right["width"] + separation_x <= left["x"]
@@ -374,13 +430,19 @@ def _physical_score(placements: list[dict], edges: list[dict]) -> float:
             continue
         left, right = by_name[edge["left"]], by_name[edge["right"]]
         left_center = (left["x"] + left["width"] / 2, left["y"] + left["height"] / 2)
-        right_center = (right["x"] + right["width"] / 2, right["y"] + right["height"] / 2)
+        right_center = (
+            right["x"] + right["width"] / 2,
+            right["y"] + right["height"] / 2,
+        )
         wire += edge["weight"] * (
-            abs(left_center[0] - right_center[0]) + abs(left_center[1] - right_center[1])
+            abs(left_center[0] - right_center[0])
+            + abs(left_center[1] - right_center[1])
         )
         direction += _direction_cost(
-            (left["x"], left["y"]), (left["width"], left["height"]),
-            (right["x"], right["y"]), (right["width"], right["height"]),
+            (left["x"], left["y"]),
+            (left["width"], left["height"]),
+            (right["x"], right["y"]),
+            (right["width"], right["height"]),
             edge.get("direction"),
         )
     wire_scale = max(1.0, sum(edge["weight"] for edge in edges) * math.sqrt(macro_area))
@@ -414,12 +476,14 @@ def _legalize(
         original = (item["x"], item["y"])
         candidates = set()
         for obstacle in fixed:
-            candidates.update({
-                (obstacle["x"] + obstacle["width"] + separation_x, item["y"]),
-                (obstacle["x"] - item["width"] - separation_x, item["y"]),
-                (item["x"], obstacle["y"] + obstacle["height"] + separation_y),
-                (item["x"], obstacle["y"] - item["height"] - separation_y),
-            })
+            candidates.update(
+                {
+                    (obstacle["x"] + obstacle["width"] + separation_x, item["y"]),
+                    (obstacle["x"] - item["width"] - separation_x, item["y"]),
+                    (item["x"], obstacle["y"] + obstacle["height"] + separation_y),
+                    (item["x"], obstacle["y"] - item["height"] - separation_y),
+                }
+            )
         legal = []
         for x, y in candidates:
             item["x"], item["y"] = x, y
@@ -427,11 +491,14 @@ def _legalize(
                 _rectangles_overlap(item, obstacle, separation_x, separation_y)
                 for obstacle in fixed
             ):
-                legal.append((
-                    _physical_score(placements, edges),
-                    abs(x - original[0]) + abs(y - original[1]),
-                    x, y,
-                ))
+                legal.append(
+                    (
+                        _physical_score(placements, edges),
+                        abs(x - original[0]) + abs(y - original[1]),
+                        x,
+                        y,
+                    )
+                )
         if not legal:
             raise ValueError(f"unable to legalize macro {item['name']}")
         _score, _distance, item["x"], item["y"] = min(legal)
@@ -441,7 +508,10 @@ def _legalize(
 
 
 def _compact(
-    placements: list[dict], edges: list[dict], separation_x: float, separation_y: float,
+    placements: list[dict],
+    edges: list[dict],
+    separation_x: float,
+    separation_y: float,
     passes: int = 4,
 ) -> int:
     """Slide rectangles to deterministic legal stops in either direction."""
@@ -453,20 +523,27 @@ def _compact(
             cross_axis = "y" if axis == "x" else "x"
             cross_dimension = "height" if axis == "x" else "width"
             separation = separation_x if axis == "x" else separation_y
-            for item in sorted(placements, key=lambda value: (value[axis], value["name"])):
+            for item in sorted(
+                placements, key=lambda value: (value[axis], value["name"])
+            ):
                 original = item[axis]
                 bounds_low = min(value[axis] for value in placements)
-                bounds_high = max(value[axis] + value[dimension] for value in placements)
+                bounds_high = max(
+                    value[axis] + value[dimension] for value in placements
+                )
                 candidates = {bounds_low, bounds_high - item[dimension]}
                 for obstacle in placements:
                     if obstacle is item:
                         continue
                     cross_overlap = not (
                         item[cross_axis] + item[cross_dimension] <= obstacle[cross_axis]
-                        or obstacle[cross_axis] + obstacle[cross_dimension] <= item[cross_axis]
+                        or obstacle[cross_axis] + obstacle[cross_dimension]
+                        <= item[cross_axis]
                     )
                     if cross_overlap:
-                        candidates.add(obstacle[axis] + obstacle[dimension] + separation)
+                        candidates.add(
+                            obstacle[axis] + obstacle[dimension] + separation
+                        )
                         candidates.add(obstacle[axis] - item[dimension] - separation)
                 old_score = _physical_score(placements, edges)
                 legal = []
@@ -476,7 +553,8 @@ def _compact(
                     item[axis] = target
                     if any(
                         _rectangles_overlap(item, obstacle, separation_x, separation_y)
-                        for obstacle in placements if obstacle is not item
+                        for obstacle in placements
+                        if obstacle is not item
                     ):
                         continue
                     score = _physical_score(placements, edges)
@@ -510,8 +588,14 @@ def optimize_macro_placement(
     levels = []
     for pitch in pitches:
         start, metrics = _grid_level(
-            items, edges, pitch, start, separation_x, separation_y,
-            max_passes, minimum_improvement,
+            items,
+            edges,
+            pitch,
+            start,
+            separation_x,
+            separation_y,
+            max_passes,
+            minimum_improvement,
         )
         levels.append(metrics)
 
@@ -537,5 +621,6 @@ def optimize_macro_placement(
         "region_width": width,
         "region_height": height,
         "macro_area": sum(item["width"] * item["height"] for item in placements),
-        "coverage": sum(item["width"] * item["height"] for item in placements) / max(1.0, width * height),
+        "coverage": sum(item["width"] * item["height"] for item in placements)
+        / max(1.0, width * height),
     }

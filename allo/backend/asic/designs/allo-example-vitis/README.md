@@ -1,3 +1,6 @@
+<!--- Copyright Allo authors. All Rights Reserved. -->
+<!--- SPDX-License-Identifier: Apache-2.0  -->
+
 # Allo 4x4 Vitis ASIC example
 
 This is a fixed, intentionally small ASIC-flow design. It computes one signed

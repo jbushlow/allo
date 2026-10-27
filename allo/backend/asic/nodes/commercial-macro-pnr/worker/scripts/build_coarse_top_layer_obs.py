@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Replace a macro's full top-layer OBS with coarse post-route occupancy."""
 
 from __future__ import annotations
@@ -12,8 +15,7 @@ from pathlib import Path
 
 
 RECT_RE = re.compile(
-    r"\bRECT\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+"
-    r"([-+0-9.eE]+)\s+([-+0-9.eE]+)\s*;"
+    r"\bRECT\s+([-+0-9.eE]+)\s+([-+0-9.eE]+)\s+" r"([-+0-9.eE]+)\s+([-+0-9.eE]+)\s*;"
 )
 
 
@@ -40,10 +42,13 @@ def read_geometry(path: Path):
             pitch = float(fields[1])
         elif fields[0] == "RECT":
             if len(fields) == 7:
-                rectangles.append((
-                    fields[1], normalize_net_name(fields[2]),
-                    tuple(map(float, fields[3:7])),
-                ))
+                rectangles.append(
+                    (
+                        fields[1],
+                        normalize_net_name(fields[2]),
+                        tuple(map(float, fields[3:7])),
+                    )
+                )
             elif len(fields) == 6:  # Backward-compatible diagnostic input.
                 rectangles.append((fields[1], "", tuple(map(float, fields[2:6]))))
             else:
@@ -79,11 +84,13 @@ def top_layer_pin_rectangles(lef: str, layer: str):
         ):
             match = RECT_RE.search(stripped)
             if match:
-                rectangles.append((
-                    pin_name,
-                    pin_use,
-                    tuple(map(float, match.groups())),
-                ))
+                rectangles.append(
+                    (
+                        pin_name,
+                        pin_use,
+                        tuple(map(float, match.groups())),
+                    )
+                )
     return rectangles
 
 
@@ -165,7 +172,12 @@ def boundary_path(starts, forbidden, nx, ny):
             return tuple(reversed(path))
         for neighbor in ((x - 1, y), (x + 1, y), (x, y - 1), (x, y + 1)):
             xx, yy = neighbor
-            if 0 <= xx < nx and 0 <= yy < ny and neighbor not in forbidden and neighbor not in parent:
+            if (
+                0 <= xx < nx
+                and 0 <= yy < ny
+                and neighbor not in forbidden
+                and neighbor not in parent
+            ):
                 parent[neighbor] = cell
                 queue.append(neighbor)
     return ()
@@ -199,9 +211,12 @@ def main():
     parser.add_argument("--pin-grid-tracks", type=int, required=True)
     parser.add_argument("--spacing-tracks", type=int, required=True)
     args = parser.parse_args()
-    if (args.grid_tracks < 1 or args.pin_grid_tracks < 1 or
-            args.spacing_tracks < 0 or
-            args.grid_tracks % args.pin_grid_tracks != 0):
+    if (
+        args.grid_tracks < 1
+        or args.pin_grid_tracks < 1
+        or args.spacing_tracks < 0
+        or args.grid_tracks % args.pin_grid_tracks != 0
+    ):
         raise ValueError("grid tracks must be positive and spacing tracks non-negative")
 
     started = time.monotonic()
@@ -235,15 +250,13 @@ def main():
     pg_pin_rectangles = 0
     signal_pin_rectangles = 0
     for pin_name, pin_use, pin_rect in pin_records:
-        pin_fine = set(cells_for_rect(
-            pin_rect, die, fine_cell, 0.0, fine_nx, fine_ny
-        ))
+        pin_fine = set(cells_for_rect(pin_rect, die, fine_cell, 0.0, fine_nx, fine_ny))
         own_pin_geometry = set()
         unrelated = set()
         for _kind, net_name, rectangle in geometry:
-            cells = set(cells_for_rect(
-                rectangle, die, fine_cell, expansion, fine_nx, fine_ny
-            ))
+            cells = set(
+                cells_for_rect(rectangle, die, fine_cell, expansion, fine_nx, fine_ny)
+            )
             if net_name == pin_name:
                 own_pin_geometry.update(cells)
             else:
@@ -282,8 +295,7 @@ def main():
     path_cells = set().union(*access_paths.values()) if access_paths else set()
     fine_per_coarse = args.grid_tracks // args.pin_grid_tracks
     refined_coarse = {
-        (min(nx - 1, x // fine_per_coarse),
-         min(ny - 1, y // fine_per_coarse))
+        (min(nx - 1, x // fine_per_coarse), min(ny - 1, y // fine_per_coarse))
         for x, y in safe_open | path_cells
     }
 
@@ -301,19 +313,23 @@ def main():
 
     grid_rectangles = []
     for x0, y0, x1, y1 in merge_cells(coarse_kept):
-        grid_rectangles.append((
-            llx + x0 * cell,
-            lly + y0 * cell,
-            min(urx, llx + x1 * cell),
-            min(ury, lly + y1 * cell),
-        ))
+        grid_rectangles.append(
+            (
+                llx + x0 * cell,
+                lly + y0 * cell,
+                min(urx, llx + x1 * cell),
+                min(ury, lly + y1 * cell),
+            )
+        )
     for x0, y0, x1, y1 in merge_cells(fine_kept):
-        grid_rectangles.append((
-            llx + x0 * fine_cell,
-            lly + y0 * fine_cell,
-            min(urx, llx + x1 * fine_cell),
-            min(ury, lly + y1 * fine_cell),
-        ))
+        grid_rectangles.append(
+            (
+                llx + x0 * fine_cell,
+                lly + y0 * fine_cell,
+                min(urx, llx + x1 * fine_cell),
+                min(ury, lly + y1 * fine_cell),
+            )
+        )
     args.output_lef.write_text(insert_obs(lef, layer, grid_rectangles))
 
     total_cells = nx * ny

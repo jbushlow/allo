@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Plan optional SRAM perimeter packing and connected Allo kernel tiling."""
 
 from __future__ import annotations
@@ -55,7 +58,9 @@ def snap(value: float, grid: float) -> float:
     return round(math.ceil((value - 1e-12) / grid) * grid, 6)
 
 
-def oriented_dimensions(width: float, height: float, orientation: str) -> tuple[float, float]:
+def oriented_dimensions(
+    width: float, height: float, orientation: str
+) -> tuple[float, float]:
     if orientation in {"R90", "R270", "MXR90", "MYR90"}:
         return height, width
     return width, height
@@ -97,11 +102,11 @@ def rectangle_union_area(rectangles: list[tuple[float, float, float, float]]) ->
     area = 0.0
     for x0, x1 in zip(x_edges, x_edges[1:]):
         intervals = [
-            (box[1], box[3])
-            for box in rectangles
-            if box[0] < x1 and box[2] > x0
+            (box[1], box[3]) for box in rectangles if box[0] < x1 and box[2] > x0
         ]
-        area += (x1 - x0) * sum(end - start for start, end in merge_intervals(intervals))
+        area += (x1 - x0) * sum(
+            end - start for start, end in merge_intervals(intervals)
+        )
     return area
 
 
@@ -161,16 +166,17 @@ def short_row_fragment_cuts(
         y1 = min(core_height, item["y"] + item["height"] + halo)
         if x1 > x0 and y1 > y0:
             obstacles.append((x0, y0, x1, y1))
-    y_edges = sorted({0.0, core_height, *(value for box in obstacles for value in (box[1], box[3]))})
+    y_edges = sorted(
+        {0.0, core_height, *(value for box in obstacles for value in (box[1], box[3]))}
+    )
     raw = []
     for y0, y1 in zip(y_edges, y_edges[1:]):
         if y1 <= y0 + 1e-9:
             continue
         midpoint = (y0 + y1) / 2
-        blocked = merge_intervals([
-            (box[0], box[2]) for box in obstacles
-            if box[1] < midpoint < box[3]
-        ])
+        blocked = merge_intervals(
+            [(box[0], box[2]) for box in obstacles if box[1] < midpoint < box[3]]
+        )
         cursor = 0.0
         for start, end in blocked + [(core_width, core_width)]:
             gap = start - cursor
@@ -215,22 +221,28 @@ def macro_channel_soft_blockages(
         x1 = min(core_width, item["x"] + item["width"] + halo_x)
         y1 = min(core_height, item["y"] + item["height"] + halo_y)
         if x1 > x0 and y1 > y0:
-            blockages.append({
-                "name": f"allo_macro_channel_soft_{index}",
-                "macro": item["name"],
-                "x": x0,
-                "y": y0,
-                "width": x1 - x0,
-                "height": y1 - y0,
-            })
+            blockages.append(
+                {
+                    "name": f"allo_macro_channel_soft_{index}",
+                    "macro": item["name"],
+                    "x": x0,
+                    "y": y0,
+                    "width": x1 - x0,
+                    "height": y1 - y0,
+                }
+            )
     return blockages
 
 
 def lef_macros(path: Path) -> dict[str, tuple[float, float, list[str]]]:
     text = path.read_text(errors="replace")
     result = {}
-    for match in re.finditer(r"(?ms)^\s*MACRO\s+(\S+)\s*$(?P<body>.*?)^\s*END\s+\1\s*$", text):
-        size = re.search(r"\bSIZE\s+([0-9.eE+-]+)\s+BY\s+([0-9.eE+-]+)\s*;", match.group("body"))
+    for match in re.finditer(
+        r"(?ms)^\s*MACRO\s+(\S+)\s*$(?P<body>.*?)^\s*END\s+\1\s*$", text
+    ):
+        size = re.search(
+            r"\bSIZE\s+([0-9.eE+-]+)\s+BY\s+([0-9.eE+-]+)\s*;", match.group("body")
+        )
         if size:
             symmetry = re.search(r"\bSYMMETRY\s+([^;]+);", match.group("body"))
             result[match.group(1)] = (
@@ -263,7 +275,10 @@ def synthesis_area(reports: Path, require_macro_area: bool = False) -> dict[str,
     for path in reports.rglob("*.area.rpt"):
         text = path.read_text(errors="replace")
         total = None
-        for pattern in [r"Total cell area:\s*([0-9.eE+-]+)", r"^\s*Total\s+cell\s+area\s+([0-9.eE+-]+)"]:
+        for pattern in [
+            r"Total cell area:\s*([0-9.eE+-]+)",
+            r"^\s*Total\s+cell\s+area\s+([0-9.eE+-]+)",
+        ]:
             match = re.search(pattern, text, re.I | re.M)
             if match:
                 total = float(match.group(1))
@@ -301,22 +316,33 @@ def discover_srams(root: Path, netlist: str) -> list[dict]:
     instances = []
     ident = r"[A-Za-z_$][A-Za-z0-9_$]*"
     for cell, (width, height, symmetry) in sorted(cells.items()):
-        pattern = re.compile(rf"(?<![A-Za-z0-9_$]){re.escape(cell)}\s+(?P<name>{ident})\s*\(")
+        pattern = re.compile(
+            rf"(?<![A-Za-z0-9_$]){re.escape(cell)}\s+(?P<name>{ident})\s*\("
+        )
         for match in pattern.finditer(netlist):
-            instances.append({
-                "name": match.group("name"), "cell": cell, "width": width,
-                "height": height, "symmetry": symmetry,
-            })
+            instances.append(
+                {
+                    "name": match.group("name"),
+                    "cell": cell,
+                    "width": width,
+                    "height": height,
+                    "symmetry": symmetry,
+                }
+            )
     return instances
 
 
-def edge_pack(items: list[dict], width: float, height: float, keepout: float, spacing: float) -> tuple[list[dict], dict]:
+def edge_pack(
+    items: list[dict], width: float, height: float, keepout: float, spacing: float
+) -> tuple[list[dict], dict]:
     cursors = {"bottom": keepout, "right": keepout, "top": keepout, "left": keepout}
     bands = {edge: 0.0 for edge in cursors}
     placed = []
     edge_order = ["bottom", "right", "top", "left"]
     edge_index = 0
-    for item in sorted(items, key=lambda value: (-max(value["width"], value["height"]), value["name"])):
+    for item in sorted(
+        items, key=lambda value: (-max(value["width"], value["height"]), value["name"])
+    ):
         for _attempt in range(4):
             edge = edge_order[edge_index % 4]
             w, h = item["width"], item["height"]
@@ -328,7 +354,9 @@ def edge_pack(items: list[dict], width: float, height: float, keepout: float, sp
                 break
             edge_index += 1
         else:
-            raise ValueError("SRAM perimeter does not fit estimated core; increase area/aspect ratio")
+            raise ValueError(
+                "SRAM perimeter does not fit estimated core; increase area/aspect ratio"
+            )
         if edge == "bottom":
             x, y = cursors[edge], keepout
             cursors[edge] += w + spacing
@@ -342,14 +370,18 @@ def edge_pack(items: list[dict], width: float, height: float, keepout: float, sp
             x, y = keepout, height - cursors[edge] - h
             cursors[edge] += h + spacing
         bands[edge] = max(bands[edge], h if edge in {"bottom", "top"} else w)
-        placed.append({**item, "x": x, "y": y, "orientation": "R0", "edge": edge, "kind": "sram"})
+        placed.append(
+            {**item, "x": x, "y": y, "orientation": "R0", "edge": edge, "kind": "sram"}
+        )
     return placed, bands
 
 
 def connection_weights(plan: dict) -> dict[tuple[str, str], float]:
     weights = defaultdict(float)
     for channel in plan.get("whole_region_connections", []):
-        kernels = sorted({semantic_kernel(item["pe"]) for item in channel.get("endpoints", [])})
+        kernels = sorted(
+            {semantic_kernel(item["pe"]) for item in channel.get("endpoints", [])}
+        )
         width_match = re.search(r"[iu](\d+)", str(channel.get("type", "")))
         weight = float(width_match.group(1)) if width_match else 1.0
         for index, left in enumerate(kernels):
@@ -378,7 +410,9 @@ def _stream_direction(left_semantic: str, right_semantic: str) -> str | None:
     boundary-kernel suffixes are the documented fallback because the current
     whole-region manifest has producer/consumer roles but no cardinal side.
     """
-    left_kernel, right_kernel = semantic_kernel(left_semantic), semantic_kernel(right_semantic)
+    left_kernel, right_kernel = semantic_kernel(left_semantic), semantic_kernel(
+        right_semantic
+    )
     left_pid, right_pid = semantic_pid(left_semantic), semantic_pid(right_semantic)
     if left_kernel == right_kernel and len(left_pid) >= 2 and len(right_pid) >= 2:
         row_delta = right_pid[-2] - left_pid[-2]
@@ -400,7 +434,8 @@ def stream_instance_edges(plan: dict, semantic_to_name: dict[str, str]) -> list[
     accumulated = defaultdict(float)
     for channel in plan.get("whole_region_connections", []):
         endpoints = [
-            endpoint for endpoint in channel.get("endpoints", [])
+            endpoint
+            for endpoint in channel.get("endpoints", [])
             if endpoint.get("pe") in semantic_to_name
         ]
         producers = [item for item in endpoints if item.get("role") == "producer"]
@@ -408,11 +443,18 @@ def stream_instance_edges(plan: dict, semantic_to_name: dict[str, str]) -> list[
         pairs = (
             [(left, right) for left in producers for right in consumers]
             if producers and consumers
-            else [(endpoints[index], right) for index, left in enumerate(endpoints) for right in endpoints[index + 1 :]]
+            else [
+                (endpoints[index], right)
+                for index, left in enumerate(endpoints)
+                for right in endpoints[index + 1 :]
+            ]
         )
         for left, right in pairs:
             left_semantic, right_semantic = left["pe"], right["pe"]
-            left_name, right_name = semantic_to_name[left_semantic], semantic_to_name[right_semantic]
+            left_name, right_name = (
+                semantic_to_name[left_semantic],
+                semantic_to_name[right_semantic],
+            )
             if left_name == right_name:
                 continue
             direction = _stream_direction(left_semantic, right_semantic)
@@ -440,7 +482,9 @@ def pid_2d(pid: tuple[int, ...]) -> tuple[int, int]:
     return (pid[-2], pid[-1]) if len(pid) > 1 else (0, pid[-1])
 
 
-def cross_kernel_pid_relations(plan: dict) -> dict[tuple[str, str], set[tuple[tuple[int, ...], tuple[int, ...]]]]:
+def cross_kernel_pid_relations(
+    plan: dict,
+) -> dict[tuple[str, str], set[tuple[tuple[int, ...], tuple[int, ...]]]]:
     """Return concrete cross-kernel PID pairs from the whole-region graph."""
     relations: dict[tuple[str, str], set] = defaultdict(set)
     for channel in plan.get("whole_region_connections", []):
@@ -494,21 +538,27 @@ def infer_directed_interleave(
     if set(adjacency) != set(anchor_slots):
         return None
     assigned_targets = [pid for values in adjacency.values() for pid in values]
-    if set(assigned_targets) != set(target_slots) or len(assigned_targets) != len(set(assigned_targets)):
+    if set(assigned_targets) != set(target_slots) or len(assigned_targets) != len(
+        set(assigned_targets)
+    ):
         return None
 
     candidates = []
-    for transform_index, (transform_name, transform) in enumerate(D4_PID_TRANSFORMS.items()):
+    for transform_index, (transform_name, transform) in enumerate(
+        D4_PID_TRANSFORMS.items()
+    ):
         stencil = None
         valid = True
         for anchor_pid in sorted(anchor_slots):
             anchor_row, anchor_col = transform(*pid_2d(anchor_pid))
-            offsets = tuple(sorted(
-                (target_row - anchor_row, target_col - anchor_col)
-                for target_row, target_col in (
-                    pid_2d(target_pid) for target_pid in adjacency[anchor_pid]
+            offsets = tuple(
+                sorted(
+                    (target_row - anchor_row, target_col - anchor_col)
+                    for target_row, target_col in (
+                        pid_2d(target_pid) for target_pid in adjacency[anchor_pid]
+                    )
                 )
-            ))
+            )
             if stencil is None:
                 stencil = offsets
             elif offsets != stencil:
@@ -516,8 +566,10 @@ def infer_directed_interleave(
                 break
         if valid and stencil:
             span = (
-                max(offset[0] for offset in stencil) - min(offset[0] for offset in stencil)
-                + max(offset[1] for offset in stencil) - min(offset[1] for offset in stencil)
+                max(offset[0] for offset in stencil)
+                - min(offset[0] for offset in stencil)
+                + max(offset[1] for offset in stencil)
+                - min(offset[1] for offset in stencil)
             )
             candidates.append((span, transform_index, transform_name, stencil))
     if not candidates:
@@ -542,7 +594,9 @@ def infer_directed_interleave(
     }
 
 
-def infer_interleave_pairs(grouped: dict[str, list[dict]], plan: dict) -> tuple[list[dict], list[dict]]:
+def infer_interleave_pairs(
+    grouped: dict[str, list[dict]], plan: dict
+) -> tuple[list[dict], list[dict]]:
     """Select nonoverlapping, exact interleaving pairs; report every decision."""
     relations = cross_kernel_pid_relations(plan)
     accepted_candidates = []
@@ -557,18 +611,26 @@ def infer_interleave_pairs(grouped: dict[str, list[dict]], plan: dict) -> tuple[
         candidates = [
             candidate
             for anchor, target, directed in directed_pairs
-            if (candidate := infer_directed_interleave(
-                anchor, target, grouped[anchor], grouped[target], directed
-            )) is not None
+            if (
+                candidate := infer_directed_interleave(
+                    anchor, target, grouped[anchor], grouped[target], directed
+                )
+            )
+            is not None
         ]
         if not candidates:
-            decisions.append({
-                "kernels": [left, right], "accepted": False,
-                "reason": "no exact complete nonoverlapping repeated PID stencil",
-            })
+            decisions.append(
+                {
+                    "kernels": [left, right],
+                    "accepted": False,
+                    "reason": "no exact complete nonoverlapping repeated PID stencil",
+                }
+            )
             continue
         # Prefer fewer composite tiles and then a deterministic kernel name.
-        candidate = min(candidates, key=lambda item: (item["anchor_count"], item["anchor_kernel"]))
+        candidate = min(
+            candidates, key=lambda item: (item["anchor_count"], item["anchor_kernel"])
+        )
         accepted_candidates.append(candidate)
 
     # Stronger/repeated candidates claim kernels first. Kernel-disjoint pairing
@@ -577,14 +639,22 @@ def infer_interleave_pairs(grouped: dict[str, list[dict]], plan: dict) -> tuple[
     accepted = []
     for candidate in sorted(
         accepted_candidates,
-        key=lambda item: (-item["target_count"], item["anchor_count"], item["anchor_kernel"], item["target_kernel"]),
+        key=lambda item: (
+            -item["target_count"],
+            item["anchor_count"],
+            item["anchor_kernel"],
+            item["target_kernel"],
+        ),
     ):
         pair = {candidate["anchor_kernel"], candidate["target_kernel"]}
         if pair & claimed:
-            decisions.append({
-                "kernels": sorted(pair), "accepted": False,
-                "reason": "kernel already claimed by a stronger disjoint interleave pair",
-            })
+            decisions.append(
+                {
+                    "kernels": sorted(pair),
+                    "accepted": False,
+                    "reason": "kernel already claimed by a stronger disjoint interleave pair",
+                }
+            )
             continue
         claimed.update(pair)
         candidate = {**candidate, "accepted": True}
@@ -605,7 +675,9 @@ def build_kernel_cluster(members: list[dict], macro_x: float, macro_y: float) ->
     row_height = {row: 0.0 for row in rows}
     for pid, values in slots.items():
         row, col = pid_2d(pid)
-        width = sum(item["width"] for item in values) + macro_x * max(0, len(values) - 1)
+        width = sum(item["width"] for item in values) + macro_x * max(
+            0, len(values) - 1
+        )
         col_width[col] = max(col_width[col], width)
         row_height[row] = max(row_height[row], max(item["height"] for item in values))
     x_offsets, cursor = {}, 0.0
@@ -630,23 +702,40 @@ def build_interleaved_cluster(
     inference: dict, grouped: dict[str, list[dict]], macro_x: float, macro_y: float
 ) -> dict:
     """Tile repeated cross-kernel composite groups on the anchor PID grid."""
-    anchor_by_pid = {tuple(item["pid"]): item for item in grouped[inference["anchor_kernel"]]}
-    target_by_pid = {tuple(item["pid"]): item for item in grouped[inference["target_kernel"]]}
+    anchor_by_pid = {
+        tuple(item["pid"]): item for item in grouped[inference["anchor_kernel"]]
+    }
+    target_by_pid = {
+        tuple(item["pid"]): item for item in grouped[inference["target_kernel"]]
+    }
     tiles = {}
     for group in inference["groups"]:
         anchor_pid = tuple(group["anchor_pid"])
         members = [anchor_by_pid[anchor_pid]] + [
             target_by_pid[tuple(pid)] for pid in group["target_pids"]
         ]
-        members = sorted(members, key=lambda item: (item["kernel"] != inference["anchor_kernel"], pid_2d(tuple(item["pid"])), item["name"]))
+        members = sorted(
+            members,
+            key=lambda item: (
+                item["kernel"] != inference["anchor_kernel"],
+                pid_2d(tuple(item["pid"])),
+                item["name"],
+            ),
+        )
         width = sum(item["width"] for item in members) + macro_x * (len(members) - 1)
         height = max(item["height"] for item in members)
         tiles[anchor_pid] = {"members": members, "width": width, "height": height}
 
     rows = sorted({pid_2d(pid)[0] for pid in tiles})
     cols = sorted({pid_2d(pid)[1] for pid in tiles})
-    col_width = {col: max(tile["width"] for pid, tile in tiles.items() if pid_2d(pid)[1] == col) for col in cols}
-    row_height = {row: max(tile["height"] for pid, tile in tiles.items() if pid_2d(pid)[0] == row) for row in rows}
+    col_width = {
+        col: max(tile["width"] for pid, tile in tiles.items() if pid_2d(pid)[1] == col)
+        for col in cols
+    }
+    row_height = {
+        row: max(tile["height"] for pid, tile in tiles.items() if pid_2d(pid)[0] == row)
+        for row in rows
+    }
     x_offsets, cursor = {}, 0.0
     for col in cols:
         x_offsets[col], cursor = cursor, cursor + col_width[col] + macro_x
@@ -665,7 +754,9 @@ def build_interleaved_cluster(
     return {"width": width, "height": height, "members": local}
 
 
-def optimize_slots(kernels: list[str], weights: dict, passes: int) -> dict[str, tuple[int, int]]:
+def optimize_slots(
+    kernels: list[str], weights: dict, passes: int
+) -> dict[str, tuple[int, int]]:
     cols = max(1, math.ceil(math.sqrt(len(kernels))))
     degrees = {kernel: 0.0 for kernel in kernels}
     for (left, right), weight in weights.items():
@@ -677,7 +768,11 @@ def optimize_slots(kernels: list[str], weights: dict, passes: int) -> dict[str, 
     def cost(candidate: list[str]) -> float:
         positions = {name: slots[index] for index, name in enumerate(candidate)}
         return sum(
-            weight * (abs(positions[left][0] - positions[right][0]) + abs(positions[left][1] - positions[right][1]))
+            weight
+            * (
+                abs(positions[left][0] - positions[right][0])
+                + abs(positions[left][1] - positions[right][1])
+            )
             for (left, right), weight in weights.items()
             if left in positions and right in positions
         )
@@ -758,7 +853,10 @@ def compose_orientation(rotation: str, orientation: str) -> str:
     """Apply a whole-cluster rotation outside a member's existing transform."""
     left, right = ROTATION_MATRICES[rotation], ROTATION_MATRICES[orientation]
     product = tuple(
-        tuple(sum(left[row][index] * right[index][column] for index in range(2)) for column in range(2))
+        tuple(
+            sum(left[row][index] * right[index][column] for index in range(2))
+            for column in range(2)
+        )
         for row in range(2)
     )
     return MATRIX_ORIENTATIONS[product]
@@ -768,7 +866,10 @@ def legal_cluster_rotations(cluster: dict) -> list[str]:
     # R180 requires X/Y reflection support; quarter turns additionally require
     # R90. Published macro LEFs normally provide the full X Y R90 set.
     rotations = ["R0"]
-    if all({"X", "Y"}.issubset(set(item.get("lef_symmetry", []))) for item in cluster["members"]):
+    if all(
+        {"X", "Y"}.issubset(set(item.get("lef_symmetry", [])))
+        for item in cluster["members"]
+    ):
         rotations.append("R180")
     if all("R90" in item.get("lef_symmetry", []) for item in cluster["members"]):
         rotations.extend(["R90", "R270"])
@@ -779,7 +880,12 @@ def rotate_cluster(cluster: dict, rotation: str) -> dict:
     width, height = cluster["width"], cluster["height"]
     transformed = []
     for item in cluster["members"]:
-        x, y, item_w, item_h = item["local_x"], item["local_y"], item["width"], item["height"]
+        x, y, item_w, item_h = (
+            item["local_x"],
+            item["local_y"],
+            item["width"],
+            item["height"],
+        )
         if rotation == "R0":
             new_x, new_y = x, y
         elif rotation == "R90":
@@ -790,14 +896,16 @@ def rotate_cluster(cluster: dict, rotation: str) -> dict:
             new_x, new_y = y, width - x - item_w
         else:
             raise ValueError(f"unsupported cluster rotation {rotation}")
-        transformed.append({
-            **item,
-            "local_x": new_x,
-            "local_y": new_y,
-            "width": item_h if rotation in {"R90", "R270"} else item_w,
-            "height": item_w if rotation in {"R90", "R270"} else item_h,
-            "orientation": compose_orientation(rotation, item["orientation"]),
-        })
+        transformed.append(
+            {
+                **item,
+                "local_x": new_x,
+                "local_y": new_y,
+                "width": item_h if rotation in {"R90", "R270"} else item_w,
+                "height": item_w if rotation in {"R90", "R270"} else item_h,
+                "orientation": compose_orientation(rotation, item["orientation"]),
+            }
+        )
     return {
         "width": height if rotation in {"R90", "R270"} else width,
         "height": width if rotation in {"R90", "R270"} else height,
@@ -818,7 +926,10 @@ def choose_cluster_rotations(
     choices = {name: "R0" for name in clusters}
 
     def materialize() -> dict[str, dict]:
-        return {name: rotate_cluster(cluster, choices[name]) for name, cluster in clusters.items()}
+        return {
+            name: rotate_cluster(cluster, choices[name])
+            for name, cluster in clusters.items()
+        }
 
     def score(oriented: dict[str, dict]) -> float:
         xs, ys, region_w, region_h = variable_slot_extents(
@@ -832,7 +943,11 @@ def choose_cluster_rotations(
             for name in oriented
         }
         wire = sum(
-            weight * (abs(centers[left][0] - centers[right][0]) + abs(centers[left][1] - centers[right][1]))
+            weight
+            * (
+                abs(centers[left][0] - centers[right][0])
+                + abs(centers[left][1] - centers[right][1])
+            )
             for (left, right), weight in weights.items()
             if left in centers and right in centers
         )
@@ -877,9 +992,7 @@ def main() -> None:
     enable_macro_channel_soft_blockages = boolean_parameter(
         "enable_macro_channel_soft_blockages", True
     )
-    soft_blockage_fraction = parameter(
-        "macro_channel_soft_blockage_fraction", 0.5
-    )
+    soft_blockage_fraction = parameter("macro_channel_soft_blockage_fraction", 0.5)
     peripheral_sides = peripheral_sides_parameter()
     kernel_x = parameter("kernel_separation_x", 30.0)
     kernel_y = parameter("kernel_separation_y", 30.0)
@@ -889,7 +1002,9 @@ def main() -> None:
     aspect = parameter("floorplan_aspect_ratio", 1.0)
     passes = int(parameter("kernel_optimization_passes", 12))
     placement_algorithm = choice_parameter(
-        "macro_placement_algorithm", "stream_grid", {"stream_grid", "legacy_cluster_grid"}
+        "macro_placement_algorithm",
+        "stream_grid",
+        {"stream_grid", "legacy_cluster_grid"},
     )
     grid_passes = int(parameter("stream_grid_max_passes", 16))
     grid_minimum_improvement = parameter("stream_grid_minimum_improvement", 1e-5)
@@ -924,14 +1039,22 @@ def main() -> None:
             orient = "R0"
         width, height = oriented_dimensions(width, height, orient)
         kernel = semantic_kernel(item["semantic_id"])
-        grouped[kernel].append({
-            "name": stable, "cell": item["canonical_module"], "semantic_id": item["semantic_id"],
-            "pid": semantic_pid(item["semantic_id"]), "width": width, "height": height,
-            "orientation": orient, "kind": "pe", "macro_class_id": item["macro_class_id"],
-            "lef_symmetry": symmetries[item["macro_class_id"]],
-            "candidate_kind": item.get("candidate_kind", "semantic_pe"),
-            "kernel": kernel,
-        })
+        grouped[kernel].append(
+            {
+                "name": stable,
+                "cell": item["canonical_module"],
+                "semantic_id": item["semantic_id"],
+                "pid": semantic_pid(item["semantic_id"]),
+                "width": width,
+                "height": height,
+                "orientation": orient,
+                "kind": "pe",
+                "macro_class_id": item["macro_class_id"],
+                "lef_symmetry": symmetries[item["macro_class_id"]],
+                "candidate_kind": item.get("candidate_kind", "semantic_pe"),
+                "kernel": kernel,
+            }
+        )
     semantic_to_name = {
         item["semantic_id"]: item["name"]
         for members in grouped.values()
@@ -971,13 +1094,17 @@ def main() -> None:
             clusters, slot_map, placement_weights, kernel_x, kernel_y, passes
         )
     else:
-        clusters = {name: rotate_cluster(cluster, "R0") for name, cluster in clusters.items()}
-    column_offsets, row_offsets, kernel_region_w, kernel_region_h = variable_slot_extents(
-        clusters, slot_map, kernel_x, kernel_y
+        clusters = {
+            name: rotate_cluster(cluster, "R0") for name, cluster in clusters.items()
+        }
+    column_offsets, row_offsets, kernel_region_w, kernel_region_h = (
+        variable_slot_extents(clusters, slot_map, kernel_x, kernel_y)
     )
 
     srams = discover_srams(inputs / "srams", netlist)
-    macro_area = sum(item["width"] * item["height"] for values in grouped.values() for item in values)
+    macro_area = sum(
+        item["width"] * item["height"] for values in grouped.values() for item in values
+    )
     sram_area = sum(item["width"] * item["height"] for item in srams)
     area_budget = synthesis_area(
         inputs / "synthesis-reports",
@@ -995,11 +1122,13 @@ def main() -> None:
         col, row = slot_map[kernel]
         cluster = clusters[kernel]
         for member in cluster["members"]:
-            local_pe_placements.append({
-                **member,
-                "x": column_offsets[col] + member["local_x"],
-                "y": row_offsets[row] + member["local_y"],
-            })
+            local_pe_placements.append(
+                {
+                    **member,
+                    "x": column_offsets[col] + member["local_x"],
+                    "y": row_offsets[row] + member["local_y"],
+                }
+            )
     placement_metrics = {
         "algorithm": "legacy_cluster_grid",
         "region_width": kernel_region_w,
@@ -1023,19 +1152,19 @@ def main() -> None:
         kernel_region_h = placement_metrics["region_height"]
     halo_x = macro_x * soft_blockage_fraction
     halo_y = macro_y * soft_blockage_fraction
-    soft_blockage_union_area = rectangle_union_area([
-        (
-            item["x"] - halo_x,
-            item["y"] - halo_y,
-            item["x"] + item["width"] + halo_x,
-            item["y"] + item["height"] + halo_y,
-        )
-        for item in local_pe_placements
-    ])
+    soft_blockage_union_area = rectangle_union_area(
+        [
+            (
+                item["x"] - halo_x,
+                item["y"] - halo_y,
+                item["x"] + item["width"] + halo_x,
+                item["y"] + item["height"] + halo_y,
+            )
+            for item in local_pe_placements
+        ]
+    )
     reserved_pe_area = (
-        soft_blockage_union_area
-        if enable_macro_channel_soft_blockages
-        else macro_area
+        soft_blockage_union_area if enable_macro_channel_soft_blockages else macro_area
     )
     target_area = reserved_pe_area + sram_area + standard_area / density
 
@@ -1044,18 +1173,36 @@ def main() -> None:
     # expansion; the normal no-SRAM path converges on its first pass.
     bands = {side: 0.0 for side in ("left", "right", "bottom", "top")}
     for _ in range(12):
-        margin_left = max(keepout, halo_x) + bands["left"] + (sram_spacing if bands["left"] else 0)
-        margin_right = max(keepout, halo_x) + bands["right"] + (sram_spacing if bands["right"] else 0)
-        margin_bottom = max(keepout, halo_y) + bands["bottom"] + (sram_spacing if bands["bottom"] else 0)
-        margin_top = max(keepout, halo_y) + bands["top"] + (sram_spacing if bands["top"] else 0)
+        margin_left = (
+            max(keepout, halo_x)
+            + bands["left"]
+            + (sram_spacing if bands["left"] else 0)
+        )
+        margin_right = (
+            max(keepout, halo_x)
+            + bands["right"]
+            + (sram_spacing if bands["right"] else 0)
+        )
+        margin_bottom = (
+            max(keepout, halo_y)
+            + bands["bottom"]
+            + (sram_spacing if bands["bottom"] else 0)
+        )
+        margin_top = (
+            max(keepout, halo_y) + bands["top"] + (sram_spacing if bands["top"] else 0)
+        )
         base_core_w = kernel_region_w + margin_left + margin_right
         base_core_h = kernel_region_h + margin_bottom + margin_top
         requested_added_area = max(0.0, target_area - base_core_w * base_core_h)
         peripheral_expansion = distribute_peripheral_area(
             base_core_w, base_core_h, requested_added_area, peripheral_sides, aspect
         )
-        core_w = base_core_w + peripheral_expansion["left"] + peripheral_expansion["right"]
-        core_h = base_core_h + peripheral_expansion["bottom"] + peripheral_expansion["top"]
+        core_w = (
+            base_core_w + peripheral_expansion["left"] + peripheral_expansion["right"]
+        )
+        core_h = (
+            base_core_h + peripheral_expansion["bottom"] + peripheral_expansion["top"]
+        )
         try:
             sram_placements, new_bands = edge_pack(
                 srams, core_w, core_h, keepout, sram_spacing
@@ -1079,53 +1226,82 @@ def main() -> None:
     pe_placements, cluster_records = [], []
     if placement_algorithm == "stream_grid":
         for member in local_pe_placements:
-            pe_placements.append({
-                **member,
-                "x": snap(origin_x + member["x"], grid),
-                "y": snap(origin_y + member["y"], grid),
-                "spatial_cluster": "stream_grid",
-            })
+            pe_placements.append(
+                {
+                    **member,
+                    "x": snap(origin_x + member["x"], grid),
+                    "y": snap(origin_y + member["y"], grid),
+                    "spatial_cluster": "stream_grid",
+                }
+            )
         for kernel, members in sorted(grouped.items()):
             placed = [item for item in pe_placements if item["kernel"] == kernel]
             if not placed:
                 continue
-            x0, y0 = min(item["x"] for item in placed), min(item["y"] for item in placed)
+            x0, y0 = min(item["x"] for item in placed), min(
+                item["y"] for item in placed
+            )
             x1 = max(item["x"] + item["width"] for item in placed)
             y1 = max(item["y"] + item["height"] for item in placed)
-            cluster_records.append({
-                "kernel": kernel, "x": x0, "y": y0,
-                "width": x1 - x0, "height": y1 - y0,
-                "orientation": "mixed", "member_count": len(placed),
-            })
+            cluster_records.append(
+                {
+                    "kernel": kernel,
+                    "x": x0,
+                    "y": y0,
+                    "width": x1 - x0,
+                    "height": y1 - y0,
+                    "orientation": "mixed",
+                    "member_count": len(placed),
+                }
+            )
     else:
         for kernel in kernel_names:
             col, row = slot_map[kernel]
             cluster_x = origin_x + column_offsets[col]
             cluster_y = origin_y + row_offsets[row]
             cluster = clusters[kernel]
-            cluster_records.append({"kernel": kernel, "x": snap(cluster_x, grid), "y": snap(cluster_y, grid), **{key: cluster[key] for key in ["width", "height", "orientation"]}})
+            cluster_records.append(
+                {
+                    "kernel": kernel,
+                    "x": snap(cluster_x, grid),
+                    "y": snap(cluster_y, grid),
+                    **{key: cluster[key] for key in ["width", "height", "orientation"]},
+                }
+            )
             for member in cluster["members"]:
-                pe_placements.append({
-                    **{key: value for key, value in member.items() if not key.startswith("local_")},
-                    "x": snap(cluster_x + member["local_x"], grid),
-                    "y": snap(cluster_y + member["local_y"], grid),
-                    "kernel": member.get("kernel", kernel),
-                    "spatial_cluster": kernel,
-                })
+                pe_placements.append(
+                    {
+                        **{
+                            key: value
+                            for key, value in member.items()
+                            if not key.startswith("local_")
+                        },
+                        "x": snap(cluster_x + member["local_x"], grid),
+                        "y": snap(cluster_y + member["local_y"], grid),
+                        "kernel": member.get("kernel", kernel),
+                        "spatial_cluster": kernel,
+                    }
+                )
     planned_core_w = round(core_w, 6)
     planned_core_h = round(core_h, 6)
     planned_core_area = planned_core_w * planned_core_h
     minimum_envelope_area = base_core_w * base_core_h
-    keepout_allowance = max(
-        0.0, minimum_envelope_area - reserved_pe_area - sram_area
-    )
+    keepout_allowance = max(0.0, minimum_envelope_area - reserved_pe_area - sram_area)
     estimated_placeable_area = planned_core_area - reserved_pe_area - sram_area
     predicted_density, density_limit = validate_predicted_density(
         standard_area, estimated_placeable_area, density
     )
-    placements = [{**item, "x": snap(item["x"], grid), "y": snap(item["y"], grid)} for item in sram_placements] + pe_placements
+    placements = [
+        {**item, "x": snap(item["x"], grid), "y": snap(item["y"], grid)}
+        for item in sram_placements
+    ] + pe_placements
     for item in placements:
-        if item["x"] < 0 or item["y"] < 0 or item["x"] + item["width"] > planned_core_w + grid or item["y"] + item["height"] > planned_core_h + grid:
+        if (
+            item["x"] < 0
+            or item["y"] < 0
+            or item["x"] + item["width"] > planned_core_w + grid
+            or item["y"] + item["height"] > planned_core_h + grid
+        ):
             raise ValueError(f"placement outside core: {item['name']}")
     for index, left in enumerate(placements):
         for right in placements[index + 1 :]:
@@ -1136,7 +1312,9 @@ def main() -> None:
                 or right["y"] + right["height"] <= left["y"]
             )
             if overlap:
-                raise ValueError(f"physical-intent overlap: {left['name']} and {right['name']}")
+                raise ValueError(
+                    f"physical-intent overlap: {left['name']} and {right['name']}"
+                )
     row_fragment_cuts = short_row_fragment_cuts(
         placements, planned_core_w, planned_core_h, row_cut_halo, min_row_width
     )
@@ -1153,9 +1331,22 @@ def main() -> None:
         else []
     )
     intent = {
-        "schema_version": 1, "stage": "physical_intent", "top_module": plan["top_module"],
-        "core": {"width": planned_core_w, "height": planned_core_h, "usable_rectangle": free},
-        "constraints": {"macro_separation_x": macro_x, "macro_separation_y": macro_y, "kernel_separation_x": kernel_x, "kernel_separation_y": kernel_y, "edge_keepout": keepout, "peripheral_placement_sides": sorted(peripheral_sides)},
+        "schema_version": 1,
+        "stage": "physical_intent",
+        "top_module": plan["top_module"],
+        "core": {
+            "width": planned_core_w,
+            "height": planned_core_h,
+            "usable_rectangle": free,
+        },
+        "constraints": {
+            "macro_separation_x": macro_x,
+            "macro_separation_y": macro_y,
+            "kernel_separation_x": kernel_x,
+            "kernel_separation_y": kernel_y,
+            "edge_keepout": keepout,
+            "peripheral_placement_sides": sorted(peripheral_sides),
+        },
         "standard_cell_area_estimate": standard_area,
         "area_budget": {
             **area_budget,
@@ -1180,9 +1371,13 @@ def main() -> None:
             "edge_expansion": peripheral_expansion,
             "preferred_aspect_ratio": aspect,
         },
-        "kernel_connections": [{"kernels": list(key), "weight": value} for key, value in sorted(weights.items())],
+        "kernel_connections": [
+            {"kernels": list(key), "weight": value}
+            for key, value in sorted(weights.items())
+        ],
         "instance_stream_connections": instance_edges,
-        "kernel_clusters": cluster_records, "placements": placements,
+        "kernel_clusters": cluster_records,
+        "placements": placements,
         "kernel_packing_policy": {
             "type": placement_algorithm,
             "whole_kernel_rotation_enabled": enable_kernel_rotation,
@@ -1195,7 +1390,9 @@ def main() -> None:
         },
         "cross_kernel_interleaving": {
             "enabled": interleave_macros,
-            "mode": "exact_complete_d4_pid_stencil" if interleave_macros else "disabled",
+            "mode": (
+                "exact_complete_d4_pid_stencil" if interleave_macros else "disabled"
+            ),
             "accepted_pair_count": len(interleave_inferences),
             "accepted_pairs": interleave_inferences,
             "decisions": interleave_decisions,
@@ -1222,69 +1419,97 @@ def main() -> None:
             "cut_count": len(row_fragment_cuts),
             "cuts": row_fragment_cuts,
         },
-        "sram_support": {"enabled": bool(srams), "instance_count": len(srams), "policy": "sequential_perimeter"},
+        "sram_support": {
+            "enabled": bool(srams),
+            "instance_count": len(srams),
+            "policy": "sequential_perimeter",
+        },
     }
     (outputs / "physical-intent.json").write_text(json.dumps(intent, indent=2) + "\n")
     tcl = [
         "# Generated physical intent; coordinates are offsets from the core lower-left.",
-        f"set allo_core_width {intent['core']['width']}", f"set allo_core_height {intent['core']['height']}",
-        "proc place_allo_physical_intent {} {", "  set core [dbGet top.fPlan.coreBox]", "  if {[llength $core] == 1} { set core [lindex $core 0] }", "  set llx [lindex $core 0]", "  set lly [lindex $core 1]", "  set placed 0", "  set all_instance_names [dbGet top.insts.name]",
+        f"set allo_core_width {intent['core']['width']}",
+        f"set allo_core_height {intent['core']['height']}",
+        "proc place_allo_physical_intent {} {",
+        "  set core [dbGet top.fPlan.coreBox]",
+        "  if {[llength $core] == 1} { set core [lindex $core 0] }",
+        "  set llx [lindex $core 0]",
+        "  set lly [lindex $core 1]",
+        "  set placed 0",
+        "  set all_instance_names [dbGet top.insts.name]",
     ]
     for item in placements:
-        tcl.extend([
-            f"  set matches [lsearch -all -inline -exact $all_instance_names {{{item['name']}}}]",
-            f"  if {{[llength $matches] != 1}} {{ error \"Expected exactly one macro instance {item['name']}\" }}",
-            "  set actual_name [lindex $matches 0]",
-            f"  placeInstance $actual_name [expr {{$llx + {item['x']}}}] [expr {{$lly + {item['y']}}}] {item['orientation']}",
-            "  incr placed",
-        ])
-    tcl.extend([
-        "  if {$placed > 0} {",
-        "    setInstancePlacementStatus -allHardMacros -status fixed",
-        "  }",
-        "  return $placed",
-        "}",
-    ])
-    tcl.extend([
-        "",
-        "# Remove only row fragments too narrow to support useful placement.",
-        "# Large spaces inside and between kernel clusters remain placeable.",
-        "proc cut_allo_short_row_fragments {} {",
-        "  set core [dbGet top.fPlan.coreBox]",
-        "  if {[llength $core] == 1} { set core [lindex $core 0] }",
-        "  set llx [lindex $core 0]",
-        "  set lly [lindex $core 1]",
-        "  set cut_count 0",
-    ])
+        tcl.extend(
+            [
+                f"  set matches [lsearch -all -inline -exact $all_instance_names {{{item['name']}}}]",
+                f"  if {{[llength $matches] != 1}} {{ error \"Expected exactly one macro instance {item['name']}\" }}",
+                "  set actual_name [lindex $matches 0]",
+                f"  placeInstance $actual_name [expr {{$llx + {item['x']}}}] [expr {{$lly + {item['y']}}}] {item['orientation']}",
+                "  incr placed",
+            ]
+        )
+    tcl.extend(
+        [
+            "  if {$placed > 0} {",
+            "    setInstancePlacementStatus -allHardMacros -status fixed",
+            "  }",
+            "  return $placed",
+            "}",
+        ]
+    )
+    tcl.extend(
+        [
+            "",
+            "# Remove only row fragments too narrow to support useful placement.",
+            "# Large spaces inside and between kernel clusters remain placeable.",
+            "proc cut_allo_short_row_fragments {} {",
+            "  set core [dbGet top.fPlan.coreBox]",
+            "  if {[llength $core] == 1} { set core [lindex $core 0] }",
+            "  set llx [lindex $core 0]",
+            "  set lly [lindex $core 1]",
+            "  set cut_count 0",
+        ]
+    )
     for cut in row_fragment_cuts:
-        tcl.extend([
-            f"  cutRow -area [list [expr {{$llx + {cut['x']}}}] [expr {{$lly + {cut['y']}}}] [expr {{$llx + {cut['x']} + {cut['width']}}}] [expr {{$lly + {cut['y']} + {cut['height']}}}]]",
-            "  incr cut_count",
-        ])
+        tcl.extend(
+            [
+                f"  cutRow -area [list [expr {{$llx + {cut['x']}}}] [expr {{$lly + {cut['y']}}}] [expr {{$llx + {cut['x']} + {cut['width']}}}] [expr {{$lly + {cut['y']} + {cut['height']}}}]]",
+                "  incr cut_count",
+            ]
+        )
     tcl.extend(["  return $cut_count", "}"])
-    tcl.extend([
-        "",
-        "# Soft blockages exclude ordinary logic but permit optimization cells.",
-        "proc create_allo_macro_channel_soft_blockages {} {",
-        "  set core [dbGet top.fPlan.coreBox]",
-        "  if {[llength $core] == 1} { set core [lindex $core 0] }",
-        "  set llx [lindex $core 0]",
-        "  set lly [lindex $core 1]",
-        "  set blockage_count 0",
-    ])
+    tcl.extend(
+        [
+            "",
+            "# Soft blockages exclude ordinary logic but permit optimization cells.",
+            "proc create_allo_macro_channel_soft_blockages {} {",
+            "  set core [dbGet top.fPlan.coreBox]",
+            "  if {[llength $core] == 1} { set core [lindex $core 0] }",
+            "  set llx [lindex $core 0]",
+            "  set lly [lindex $core 1]",
+            "  set blockage_count 0",
+        ]
+    )
     for blockage in channel_soft_blockages:
-        tcl.extend([
-            f"  createPlaceBlockage -type soft -snapToSite -name {blockage['name']} -box [list [expr {{$llx + {blockage['x']}}}] [expr {{$lly + {blockage['y']}}}] [expr {{$llx + {blockage['x']} + {blockage['width']}}}] [expr {{$lly + {blockage['y']} + {blockage['height']}}}]]",
-            "  incr blockage_count",
-        ])
+        tcl.extend(
+            [
+                f"  createPlaceBlockage -type soft -snapToSite -name {blockage['name']} -box [list [expr {{$llx + {blockage['x']}}}] [expr {{$lly + {blockage['y']}}}] [expr {{$llx + {blockage['x']} + {blockage['width']}}}] [expr {{$lly + {blockage['y']} + {blockage['height']}}}]]",
+                "  incr blockage_count",
+            ]
+        )
     tcl.extend(["  return $blockage_count", "}"])
     (outputs / "physical-intent.tcl").write_text("\n".join(tcl) + "\n")
     scale = min(1000 / max(core_w, 1), 800 / max(core_h, 1))
     colors = {"pe": "#4c78a8", "sram": "#f58518"}
-    svg = [f'<svg xmlns="http://www.w3.org/2000/svg" width="{core_w*scale:.1f}" height="{core_h*scale:.1f}" viewBox="0 0 {core_w} {core_h}">', f'<rect width="{core_w}" height="{core_h}" fill="white" stroke="black"/>']
+    svg = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{core_w*scale:.1f}" height="{core_h*scale:.1f}" viewBox="0 0 {core_w} {core_h}">',
+        f'<rect width="{core_w}" height="{core_h}" fill="white" stroke="black"/>',
+    ]
     for item in placements:
         y = core_h - item["y"] - item["height"]
-        svg.append(f'<rect x="{item["x"]}" y="{y}" width="{item["width"]}" height="{item["height"]}" fill="{colors[item["kind"]]}" stroke="black"><title>{item["name"]}</title></rect>')
+        svg.append(
+            f'<rect x="{item["x"]}" y="{y}" width="{item["width"]}" height="{item["height"]}" fill="{colors[item["kind"]]}" stroke="black"><title>{item["name"]}</title></rect>'
+        )
     svg.append("</svg>")
     (outputs / "physical-intent.svg").write_text("\n".join(svg) + "\n")
     (outputs / "physical-intent-report.txt").write_text(

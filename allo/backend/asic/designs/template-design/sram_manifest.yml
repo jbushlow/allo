@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 srams:
   - name: <fill in if using SRAMs - name as used in design>
     word_size: <fill in if using SRAMs>

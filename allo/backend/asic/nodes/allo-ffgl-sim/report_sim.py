@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 import argparse
 import json
 from pathlib import Path
@@ -23,7 +26,11 @@ def main():
     report = {
         "schema_version": 1,
         "mode": args.mode,
-        "status": "passed" if pass_marker and args.vcd.is_file() and args.vcd.stat().st_size else "failed",
+        "status": (
+            "passed"
+            if pass_marker and args.vcd.is_file() and args.vcd.stat().st_size
+            else "failed"
+        ),
         "pass_marker_found": pass_marker,
         "vcd_bytes": args.vcd.stat().st_size if args.vcd.is_file() else 0,
         "macro_model_count": args.macro_model_count,

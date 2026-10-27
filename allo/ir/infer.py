@@ -1287,9 +1287,7 @@ class TypeInferer(ASTVisitor):
                         elif src_dtype.bits == 64:
                             node.dtype = float64
                         else:
-                            raise RuntimeError(
-                                f"Unsupported bitwidth {src_dtype.bits}"
-                            )
+                            raise RuntimeError(f"Unsupported bitwidth {src_dtype.bits}")
                     else:
                         # casting between signed and unsigned types in C/C++
                         # does not modify the underlying bit representation,

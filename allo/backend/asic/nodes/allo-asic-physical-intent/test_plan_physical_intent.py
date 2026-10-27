@@ -1,3 +1,6 @@
+# Copyright Allo authors. All Rights Reserved.
+# SPDX-License-Identifier: Apache-2.0
+
 """Fast geometry tests for physical-intent planning."""
 
 import importlib.util
@@ -141,10 +144,14 @@ def test_exact_repeated_cross_kernel_stencil_is_interleaved_when_enabled():
     channels = []
     for row in (1, 2):
         for col in (2, 3):
-            channels.append({"endpoints": [
-                {"pe": f"top/compute/pid={row},0"},
-                {"pe": f"top/router/pid={row},{col}"},
-            ]})
+            channels.append(
+                {
+                    "endpoints": [
+                        {"pe": f"top/compute/pid={row},0"},
+                        {"pe": f"top/router/pid={row},{col}"},
+                    ]
+                }
+            )
     accepted, decisions = PLAN.infer_interleave_pairs(
         grouped, {"whole_region_connections": channels}
     )
@@ -157,7 +164,12 @@ def test_exact_repeated_cross_kernel_stencil_is_interleaved_when_enabled():
     assert decisions[-1]["accepted"] is True
     cluster = PLAN.build_interleaved_cluster(accepted[0], grouped, 4, 5)
     assert [item["name"] for item in cluster["members"]] == [
-        "c1", "r12", "r13", "c2", "r22", "r23"
+        "c1",
+        "r12",
+        "r13",
+        "c2",
+        "r22",
+        "r23",
     ]
     assert cluster["width"] == 38
     assert cluster["height"] == 21
@@ -175,17 +187,21 @@ def test_irregular_or_partial_cross_kernel_pattern_falls_back():
             interleave_member("top/b", 2, 1, "b2"),
         ],
     }
-    plan = {"whole_region_connections": [
-        {"endpoints": [{"pe": "top/a/pid=0,0"}, {"pe": "top/b/pid=0,1"}]},
-        {"endpoints": [{"pe": "top/a/pid=1,0"}, {"pe": "top/b/pid=1,1"}]},
-    ]}
+    plan = {
+        "whole_region_connections": [
+            {"endpoints": [{"pe": "top/a/pid=0,0"}, {"pe": "top/b/pid=0,1"}]},
+            {"endpoints": [{"pe": "top/a/pid=1,0"}, {"pe": "top/b/pid=1,1"}]},
+        ]
+    }
     accepted, decisions = PLAN.infer_interleave_pairs(grouped, plan)
     assert accepted == []
-    assert decisions == [{
-        "kernels": ["top/a", "top/b"],
-        "accepted": False,
-        "reason": "no exact complete nonoverlapping repeated PID stencil",
-    }]
+    assert decisions == [
+        {
+            "kernels": ["top/a", "top/b"],
+            "accepted": False,
+            "reason": "no exact complete nonoverlapping repeated PID stencil",
+        }
+    ]
 
 
 def test_disabled_path_uses_original_rigid_kernel_cluster_geometry():
@@ -197,10 +213,14 @@ def test_disabled_path_uses_original_rigid_kernel_cluster_geometry():
     ]
     cluster = PLAN.build_kernel_cluster(members, 4, 5)
     assert (cluster["width"], cluster["height"]) == (24, 21)
-    by_name = {item["name"]: (item["local_x"], item["local_y"]) for item in cluster["members"]}
+    by_name = {
+        item["name"]: (item["local_x"], item["local_y"]) for item in cluster["members"]
+    }
     assert by_name == {
-        "c00": (0.0, 13.0), "c01": (14.0, 13.0),
-        "c10": (0.0, 0.0), "c11": (14.0, 0.0),
+        "c00": (0.0, 13.0),
+        "c01": (14.0, 13.0),
+        "c10": (0.0, 0.0),
+        "c11": (14.0, 0.0),
     }
 
 
@@ -217,27 +237,32 @@ def test_connection_weights_are_remapped_around_composite_cluster():
 
 
 def test_instance_stream_graph_preserves_width_roles_and_direction():
-    plan = {"whole_region_connections": [
+    plan = {
+        "whole_region_connections": [
+            {
+                "type": "!allo.stream<i32, 8>",
+                "endpoints": [
+                    {"pe": "top/node/pid=0,0", "role": "producer"},
+                    {"pe": "top/node/pid=0,1", "role": "consumer"},
+                ],
+            },
+            {
+                "type": "!allo.stream<i8, 4>",
+                "endpoints": [
+                    {"pe": "top/drv_w/pid=0", "role": "producer"},
+                    {"pe": "top/node/pid=0,0", "role": "consumer"},
+                ],
+            },
+        ]
+    }
+    edges = PLAN.stream_instance_edges(
+        plan,
         {
-            "type": "!allo.stream<i32, 8>",
-            "endpoints": [
-                {"pe": "top/node/pid=0,0", "role": "producer"},
-                {"pe": "top/node/pid=0,1", "role": "consumer"},
-            ],
+            "top/node/pid=0,0": "n00",
+            "top/node/pid=0,1": "n01",
+            "top/drv_w/pid=0": "dw0",
         },
-        {
-            "type": "!allo.stream<i8, 4>",
-            "endpoints": [
-                {"pe": "top/drv_w/pid=0", "role": "producer"},
-                {"pe": "top/node/pid=0,0", "role": "consumer"},
-            ],
-        },
-    ]}
-    edges = PLAN.stream_instance_edges(plan, {
-        "top/node/pid=0,0": "n00",
-        "top/node/pid=0,1": "n01",
-        "top/drv_w/pid=0": "dw0",
-    })
+    )
     assert edges == [
         {"left": "dw0", "right": "n00", "direction": "E", "weight": 8.0},
         {"left": "n00", "right": "n01", "direction": "E", "weight": 32.0},
@@ -246,9 +271,27 @@ def test_instance_stream_graph_preserves_width_roles_and_direction():
 
 def test_stream_grid_placement_is_legal_compact_and_deterministic():
     items = [
-        {"name": "n00", "width": 20.0, "height": 20.0, "pid": (0, 0), "kernel": "top/node"},
-        {"name": "n01", "width": 20.0, "height": 20.0, "pid": (0, 1), "kernel": "top/node"},
-        {"name": "dw0", "width": 10.0, "height": 10.0, "pid": (0,), "kernel": "top/drv_w"},
+        {
+            "name": "n00",
+            "width": 20.0,
+            "height": 20.0,
+            "pid": (0, 0),
+            "kernel": "top/node",
+        },
+        {
+            "name": "n01",
+            "width": 20.0,
+            "height": 20.0,
+            "pid": (0, 1),
+            "kernel": "top/node",
+        },
+        {
+            "name": "dw0",
+            "width": 10.0,
+            "height": 10.0,
+            "pid": (0,),
+            "kernel": "top/drv_w",
+        },
     ]
     edges = [
         {"left": "dw0", "right": "n00", "direction": "E", "weight": 16.0},
@@ -274,22 +317,65 @@ def test_stream_grid_placement_is_legal_compact_and_deterministic():
 
 def test_stream_grid_anchors_cardinal_kernels_to_matching_sides():
     items = [
-        {"name": "node", "width": 20.0, "height": 20.0, "pid": (0, 0), "kernel": "top/node"},
-        {"name": "west", "width": 8.0, "height": 8.0, "pid": (0,), "kernel": "top/drv_w"},
-        {"name": "east", "width": 8.0, "height": 8.0, "pid": (0,), "kernel": "top/drv_e"},
-        {"name": "north", "width": 8.0, "height": 8.0, "pid": (0,), "kernel": "top/drv_n"},
-        {"name": "south", "width": 8.0, "height": 8.0, "pid": (0,), "kernel": "top/drv_s"},
+        {
+            "name": "node",
+            "width": 20.0,
+            "height": 20.0,
+            "pid": (0, 0),
+            "kernel": "top/node",
+        },
+        {
+            "name": "west",
+            "width": 8.0,
+            "height": 8.0,
+            "pid": (0,),
+            "kernel": "top/drv_w",
+        },
+        {
+            "name": "east",
+            "width": 8.0,
+            "height": 8.0,
+            "pid": (0,),
+            "kernel": "top/drv_e",
+        },
+        {
+            "name": "north",
+            "width": 8.0,
+            "height": 8.0,
+            "pid": (0,),
+            "kernel": "top/drv_n",
+        },
+        {
+            "name": "south",
+            "width": 8.0,
+            "height": 8.0,
+            "pid": (0,),
+            "kernel": "top/drv_s",
+        },
     ]
     edges = [
         {"left": side, "right": "node", "direction": direction, "weight": 8.0}
-        for side, direction in (("west", "E"), ("east", "W"), ("north", "S"), ("south", "N"))
+        for side, direction in (
+            ("west", "E"),
+            ("east", "W"),
+            ("north", "S"),
+            ("south", "N"),
+        )
     ]
     placed, metrics = PLAN.optimize_macro_placement(items, edges, 2.0, 2.0)
     by_name = {item["name"]: item for item in placed}
     center_x = lambda item: item["x"] + item["width"] / 2
     center_y = lambda item: item["y"] + item["height"] / 2
-    assert center_x(by_name["west"]) < center_x(by_name["node"]) < center_x(by_name["east"])
-    assert center_y(by_name["south"]) < center_y(by_name["node"]) < center_y(by_name["north"])
+    assert (
+        center_x(by_name["west"])
+        < center_x(by_name["node"])
+        < center_x(by_name["east"])
+    )
+    assert (
+        center_y(by_name["south"])
+        < center_y(by_name["node"])
+        < center_y(by_name["north"])
+    )
     assert "normalized_boundary_side" in metrics["cost_function"]
 
 
@@ -297,8 +383,11 @@ def test_regular_grid_stops_without_exhaustive_global_search():
     size = 8
     items = [
         {
-            "name": f"n{row}_{column}", "width": 8.0, "height": 8.0,
-            "pid": (row, column), "kernel": "top/node",
+            "name": f"n{row}_{column}",
+            "width": 8.0,
+            "height": 8.0,
+            "pid": (row, column),
+            "kernel": "top/node",
         }
         for row in range(size)
         for column in range(size)
@@ -307,15 +396,23 @@ def test_regular_grid_stops_without_exhaustive_global_search():
     for row in range(size):
         for column in range(size):
             if column + 1 < size:
-                edges.append({
-                    "left": f"n{row}_{column}", "right": f"n{row}_{column + 1}",
-                    "direction": "E", "weight": 8.0,
-                })
+                edges.append(
+                    {
+                        "left": f"n{row}_{column}",
+                        "right": f"n{row}_{column + 1}",
+                        "direction": "E",
+                        "weight": 8.0,
+                    }
+                )
             if row + 1 < size:
-                edges.append({
-                    "left": f"n{row}_{column}", "right": f"n{row + 1}_{column}",
-                    "direction": "S", "weight": 8.0,
-                })
+                edges.append(
+                    {
+                        "left": f"n{row}_{column}",
+                        "right": f"n{row + 1}_{column}",
+                        "direction": "S",
+                        "weight": 8.0,
+                    }
+                )
     placed, metrics = PLAN.optimize_macro_placement(
         items, edges, 0.0, 0.0, max_passes=4
     )
@@ -341,17 +438,29 @@ def test_systolic_pid_rows_are_placed_north_to_south(tmp_path, monkeypatch):
         }
         for row in (0, 1)
     ]
-    (inputs / "assembly-plan.json").write_text(json.dumps({
-        "top_module": "top",
-        "elaborated_macro_instance_count": 2,
-        "replacements": replacements,
-        "whole_region_connections": [],
-    }))
-    (inputs / "macro-registry.json").write_text(json.dumps({"macros": [{
-        "macro_class_id": "macro_alpha_test",
-        "top_module": "m",
-        "views": {"lef": {"path": "macro_alpha_test/m.lef"}},
-    }]}))
+    (inputs / "assembly-plan.json").write_text(
+        json.dumps(
+            {
+                "top_module": "top",
+                "elaborated_macro_instance_count": 2,
+                "replacements": replacements,
+                "whole_region_connections": [],
+            }
+        )
+    )
+    (inputs / "macro-registry.json").write_text(
+        json.dumps(
+            {
+                "macros": [
+                    {
+                        "macro_class_id": "macro_alpha_test",
+                        "top_module": "m",
+                        "views": {"lef": {"path": "macro_alpha_test/m.lef"}},
+                    }
+                ]
+            }
+        )
+    )
     (inputs / "macro-collateral.json").write_text("{}")
     (inputs / "design.v").write_text(
         "module top; m allo_pe_0(); m allo_pe_1(); endmodule\n"
@@ -391,12 +500,30 @@ def test_rotation_optimizer_can_turn_thin_owner_kernel_cluster():
         "top/compute": {
             "width": 100,
             "height": 100,
-            "members": [{"local_x": 0, "local_y": 0, "width": 100, "height": 100, "orientation": "R0", "lef_symmetry": symmetry}],
+            "members": [
+                {
+                    "local_x": 0,
+                    "local_y": 0,
+                    "width": 100,
+                    "height": 100,
+                    "orientation": "R0",
+                    "lef_symmetry": symmetry,
+                }
+            ],
         },
         "top/load": {
             "width": 120,
             "height": 10,
-            "members": [{"local_x": 0, "local_y": 0, "width": 120, "height": 10, "orientation": "R0", "lef_symmetry": symmetry}],
+            "members": [
+                {
+                    "local_x": 0,
+                    "local_y": 0,
+                    "width": 120,
+                    "height": 10,
+                    "orientation": "R0",
+                    "lef_symmetry": symmetry,
+                }
+            ],
         },
     }
     result = PLAN.choose_cluster_rotations(
@@ -466,20 +593,26 @@ def test_planner_main_without_optional_srams(tmp_path, monkeypatch):
     plan = {
         "top_module": "top",
         "elaborated_macro_instance_count": 1,
-        "replacements": [{
-            "stable_instance_name": "allo_pe_test",
-            "semantic_id": "top/kernel/pid=0,0",
-            "macro_class_id": "macro_alpha_test",
-            "canonical_module": "m",
-            "desired_orientation": "R0",
-        }],
+        "replacements": [
+            {
+                "stable_instance_name": "allo_pe_test",
+                "semantic_id": "top/kernel/pid=0,0",
+                "macro_class_id": "macro_alpha_test",
+                "canonical_module": "m",
+                "desired_orientation": "R0",
+            }
+        ],
         "whole_region_connections": [],
     }
-    registry = {"macros": [{
-        "macro_class_id": "macro_alpha_test",
-        "top_module": "m",
-        "views": {"lef": {"path": "macro_alpha_test/m.lef"}},
-    }]}
+    registry = {
+        "macros": [
+            {
+                "macro_class_id": "macro_alpha_test",
+                "top_module": "m",
+                "views": {"lef": {"path": "macro_alpha_test/m.lef"}},
+            }
+        ]
+    }
     (inputs / "assembly-plan.json").write_text(json.dumps(plan))
     (inputs / "macro-registry.json").write_text(json.dumps(registry))
     (inputs / "macro-collateral.json").write_text("{}")
@@ -518,7 +651,9 @@ def test_planner_main_without_optional_srams(tmp_path, monkeypatch):
 
     monkeypatch.setenv("enable_macro_channel_soft_blockages", "false")
     PLAN.main()
-    disabled_intent = json.loads((tmp_path / "outputs/physical-intent.json").read_text())
+    disabled_intent = json.loads(
+        (tmp_path / "outputs/physical-intent.json").read_text()
+    )
     disabled_tcl = (tmp_path / "outputs/physical-intent.tcl").read_text()
     assert disabled_intent["macro_channel_placement_policy"]["enabled"] is False
     assert disabled_intent["macro_channel_placement_policy"]["region_count"] == 0
@@ -550,11 +685,15 @@ def test_generated_instance_lookup_does_not_use_ambiguous_suffix_globs(
         ],
         "whole_region_connections": [],
     }
-    registry = {"macros": [{
-        "macro_class_id": "macro_alpha_test",
-        "top_module": "m",
-        "views": {"lef": {"path": "macro_alpha_test/m.lef"}},
-    }]}
+    registry = {
+        "macros": [
+            {
+                "macro_class_id": "macro_alpha_test",
+                "top_module": "m",
+                "views": {"lef": {"path": "macro_alpha_test/m.lef"}},
+            }
+        ]
+    }
     (inputs / "assembly-plan.json").write_text(json.dumps(plan))
     (inputs / "macro-registry.json").write_text(json.dumps(registry))
     (inputs / "macro-collateral.json").write_text("{}")
@@ -570,14 +709,8 @@ def test_generated_instance_lookup_does_not_use_ambiguous_suffix_globs(
     generated_tcl = (tmp_path / "outputs/physical-intent.tcl").read_text()
     assert "{*drv_e_0}" not in generated_tcl
     assert "{*rdrv_e_0}" not in generated_tcl
-    assert (
-        "lsearch -all -inline -exact $all_instance_names {drv_e_0}"
-        in generated_tcl
-    )
-    assert (
-        "lsearch -all -inline -exact $all_instance_names {rdrv_e_0}"
-        in generated_tcl
-    )
+    assert "lsearch -all -inline -exact $all_instance_names {drv_e_0}" in generated_tcl
+    assert "lsearch -all -inline -exact $all_instance_names {rdrv_e_0}" in generated_tcl
 
 
 def test_planner_main_interleaves_only_with_explicit_flag(tmp_path, monkeypatch):
@@ -596,31 +729,50 @@ def test_planner_main_interleaves_only_with_explicit_flag(tmp_path, monkeypatch)
         for row, col in pids:
             name = f"allo_{kernel}_{row}_{col}"
             names.append(name)
-            replacements.append({
-                "stable_instance_name": name,
-                "semantic_id": f"top/{kernel}/pid={row},{col}",
-                "macro_class_id": "macro_alpha_test",
-                "canonical_module": "m",
-                "desired_orientation": "R0",
-            })
+            replacements.append(
+                {
+                    "stable_instance_name": name,
+                    "semantic_id": f"top/{kernel}/pid={row},{col}",
+                    "macro_class_id": "macro_alpha_test",
+                    "canonical_module": "m",
+                    "desired_orientation": "R0",
+                }
+            )
     channels = []
     for row in (1, 2):
         for col in (2, 3):
-            channels.append({"type": "i32", "endpoints": [
-                {"pe": f"top/compute/pid={row},0"},
-                {"pe": f"top/router/pid={row},{col}"},
-            ]})
-    (inputs / "assembly-plan.json").write_text(json.dumps({
-        "top_module": "top",
-        "elaborated_macro_instance_count": len(replacements),
-        "replacements": replacements,
-        "whole_region_connections": channels,
-    }))
-    (inputs / "macro-registry.json").write_text(json.dumps({"macros": [{
-        "macro_class_id": "macro_alpha_test",
-        "top_module": "m",
-        "views": {"lef": {"path": "macro_alpha_test/m.lef"}},
-    }]}))
+            channels.append(
+                {
+                    "type": "i32",
+                    "endpoints": [
+                        {"pe": f"top/compute/pid={row},0"},
+                        {"pe": f"top/router/pid={row},{col}"},
+                    ],
+                }
+            )
+    (inputs / "assembly-plan.json").write_text(
+        json.dumps(
+            {
+                "top_module": "top",
+                "elaborated_macro_instance_count": len(replacements),
+                "replacements": replacements,
+                "whole_region_connections": channels,
+            }
+        )
+    )
+    (inputs / "macro-registry.json").write_text(
+        json.dumps(
+            {
+                "macros": [
+                    {
+                        "macro_class_id": "macro_alpha_test",
+                        "top_module": "m",
+                        "views": {"lef": {"path": "macro_alpha_test/m.lef"}},
+                    }
+                ]
+            }
+        )
+    )
     (inputs / "macro-collateral.json").write_text("{}")
     (inputs / "design.v").write_text(
         "module top; " + " ".join(f"m {name}();" for name in names) + " endmodule\n"
@@ -638,32 +790,42 @@ def test_planner_main_interleaves_only_with_explicit_flag(tmp_path, monkeypatch)
     assert policy["accepted_pair_count"] == 1
     assert len(intent["kernel_clusters"]) == 1
     assert {item["kernel"] for item in intent["placements"]} == {
-        "top/compute", "top/router"
+        "top/compute",
+        "top/router",
     }
     assert {item["spatial_cluster"] for item in intent["placements"]} == {
         "interleave:top/compute+top/router"
     }
-    assert "Accepted interleave pairs: 1" in (
-        tmp_path / "outputs/physical-intent-report.txt"
-    ).read_text()
+    assert (
+        "Accepted interleave pairs: 1"
+        in (tmp_path / "outputs/physical-intent-report.txt").read_text()
+    )
 
 
 def test_planner_main_for_flat_bypass(tmp_path, monkeypatch):
     inputs = tmp_path / "inputs"
     (inputs / "macro-registry").mkdir(parents=True)
-    (inputs / "assembly-plan.json").write_text(json.dumps({
-        "top_module": "top",
-        "bypass_macro_generation": True,
-        "implementation_style": "flat",
-        "elaborated_macro_instance_count": 0,
-        "replacements": [],
-        "whole_region_connections": [],
-    }))
-    (inputs / "macro-registry.json").write_text(json.dumps({
-        "bypass_macro_generation": True,
-        "implementation_style": "flat",
-        "macros": [],
-    }))
+    (inputs / "assembly-plan.json").write_text(
+        json.dumps(
+            {
+                "top_module": "top",
+                "bypass_macro_generation": True,
+                "implementation_style": "flat",
+                "elaborated_macro_instance_count": 0,
+                "replacements": [],
+                "whole_region_connections": [],
+            }
+        )
+    )
+    (inputs / "macro-registry.json").write_text(
+        json.dumps(
+            {
+                "bypass_macro_generation": True,
+                "implementation_style": "flat",
+                "macros": [],
+            }
+        )
+    )
     (inputs / "macro-collateral.json").write_text("{}")
     (inputs / "design.v").write_text("module top; endmodule\n")
     (inputs / "macro-link.rpt").write_text("TOTAL 0\n")
